@@ -1,0 +1,9 @@
+ABOUT
+START 15
+INFO rule 1
+INFO timeout_turn 500
+BOARD
+7,7,1
+7,8,2
+DONE
+END

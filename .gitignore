@@ -1,0 +1,44 @@
+build/
+*.o
+*.a
+.DS_Store
+
+# Data & logs
+data/
+results/
+gtp_logs/
+exports/
+archive/
+*.sgf
+*.pt
+*.pkl
+*.log
+
+# Third-party binaries & weights (clone separately in Colab)
+third_party/kgweights/
+third_party/jax25/
+third_party/gomocup_dl/
+third_party/*/build/
+third_party/*/*.so
+third_party/*/*.dylib
+third_party/*/*.exe
+third_party/*/*.pt
+third_party/*/*.pkl
+third_party/*/*.tar.gz
+third_party/*/*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Misc
+*.tmp
+*.bak
+katagomo_bridge.py.orig

@@ -1,0 +1,238 @@
+#include "bitboard.hpp"
+
+#include "rules.hpp"
+
+#include <random>
+
+namespace oog {
+
+namespace detail {
+
+// Deterministic Zobrist keys for the 272-bit grid (2 colors * SIZE).
+inline const std::array<std::uint64_t, 2 * BitBoard::SIZE> BB_ZOBRIST = [] {
+    std::array<std::uint64_t, 2 * BitBoard::SIZE> z{};
+    std::mt19937_64 rng(0xB17B0A2DUL);
+    for (auto& v : z) v = rng();
+    return z;
+}();
+
+// shiftL(out, in, n): out = in << n over the WORDS-wide little-endian layout.
+void shiftL(std::array<std::uint64_t, BitBoard::WORDS>& out,
+            const std::array<std::uint64_t, BitBoard::WORDS>& in, int n) {
+    const int w = n >> 6;
+    const int b = n & 63;
+    for (int i = BitBoard::WORDS - 1; i >= 0; --i) {
+        std::uint64_t v = 0;
+        if (i - w >= 0) {
+            v = in[static_cast<std::size_t>(i - w)] << b;
+            if (b > 0 && i - w - 1 >= 0) {
+                v |= in[static_cast<std::size_t>(i - w - 1)] >> (64 - b);
+            }
+        }
+        out[static_cast<std::size_t>(i)] = v;
+    }
+}
+
+int countLen(const std::array<std::uint64_t, BitBoard::WORDS>& bb, int sq,
+             int step) {
+    int cnt = 0;
+    for (int i = sq; i >= 0 && i < BitBoard::SIZE &&
+                   ((bb[static_cast<std::size_t>(i >> 6)] >> (i & 63)) & 1);
+         i += step) {
+        ++cnt;
+    }
+    return cnt;
+}
+
+// Precomputed Chebyshev-radius-R neighborhood for every square.
+// Sized for radius 3 (7x7 - 1 = 48 cells), which is also exactly the old
+// radius-2 capacity, so nothing grows.
+struct NeiEntry {
+    std::array<int, 48> n{};
+    int cnt = 0;
+};
+
+const std::array<NeiEntry, BitBoard::SIZE>& neighborsR(int radius) {
+    static const auto build = [](int rad) {
+        std::array<NeiEntry, BitBoard::SIZE> table{};
+        for (int r = 1; r <= 15; ++r) {
+            for (int c = 0; c <= 14; ++c) {
+                const int sq = r * BitBoard::ROW_W + c;
+                auto& e = table[static_cast<std::size_t>(sq)];
+                for (int dr = -rad; dr <= rad; ++dr) {
+                    for (int dc = -rad; dc <= rad; ++dc) {
+                        if (dr == 0 && dc == 0) continue;
+                        const int nr = r + dr;
+                        const int nc = c + dc;
+                        if (nr < 1 || nr > 15 || nc < 0 || nc > 14) continue;
+                        if (e.cnt >= static_cast<int>(e.n.size())) continue;
+                        e.n[static_cast<std::size_t>(e.cnt)] =
+                            nr * BitBoard::ROW_W + nc;
+                        ++e.cnt;
+                    }
+                }
+            }
+        }
+        return table;
+    };
+    static const auto NEI2 = build(2);
+    static const auto NEI3 = build(3);
+    return radius >= 3 ? NEI3 : NEI2;
+}
+
+const std::array<NeiEntry, BitBoard::SIZE>& neighbors() { return neighborsR(2); }
+
+}  // namespace detail
+
+void BitBoard::clear() {
+    black_.fill(0);
+    white_.fill(0);
+    key_ = 0;
+}
+
+void BitBoard::place(int color, int sq) {
+    auto& bb = color == 0 ? black_ : white_;
+    bb[static_cast<std::size_t>(sq >> 6)] |= 1ULL << (sq & 63);
+    key_ ^= detail::BB_ZOBRIST[static_cast<std::size_t>(color) * SIZE +
+                               static_cast<std::size_t>(sq)];
+}
+
+void BitBoard::remove(int color, int sq) {
+    auto& bb = color == 0 ? black_ : white_;
+    bb[static_cast<std::size_t>(sq >> 6)] &= ~(1ULL << (sq & 63));
+    key_ ^= detail::BB_ZOBRIST[static_cast<std::size_t>(color) * SIZE +
+                               static_cast<std::size_t>(sq)];
+}
+
+bool BitBoard::isBlack(int sq) const {
+    return (black_[static_cast<std::size_t>(sq >> 6)] >> (sq & 63)) & 1;
+}
+
+bool BitBoard::isWhite(int sq) const {
+    return (white_[static_cast<std::size_t>(sq >> 6)] >> (sq & 63)) & 1;
+}
+
+bool BitBoard::isEmpty(int sq) const { return !isBlack(sq) && !isWhite(sq); }
+
+Cell BitBoard::at(int sq) const {
+    return isBlack(sq) ? Cell::Black : isWhite(sq) ? Cell::White : Cell::Empty;
+}
+
+int BitBoard::count() const {
+    int total = 0;
+    for (const auto& w : black_) total += __builtin_popcountll(w);
+    for (const auto& w : white_) total += __builtin_popcountll(w);
+    return total;
+}
+
+bool BitBoard::hasFive(int color) const {
+    const auto& bb = color == 0 ? black_ : white_;
+    constexpr int DIRS[4] = {1, ROW_W, ROW_W + 1, ROW_W - 1};
+    for (const int d : DIRS) {
+        std::array<std::uint64_t, WORDS> b1;
+        std::array<std::uint64_t, WORDS> b2;
+        std::array<std::uint64_t, WORDS> b3;
+        std::array<std::uint64_t, WORDS> b4;
+        std::array<std::uint64_t, WORDS> b5;
+        detail::shiftL(b1, bb, d);
+        detail::shiftL(b2, bb, 2 * d);
+        detail::shiftL(b3, bb, 3 * d);
+        for (int i = 0; i < WORDS; ++i) {
+            b4[static_cast<std::size_t>(i)] =
+                bb[static_cast<std::size_t>(i)] & b1[static_cast<std::size_t>(i)] &
+                b2[static_cast<std::size_t>(i)] & b3[static_cast<std::size_t>(i)];
+        }
+        detail::shiftL(b5, b4, d);
+        for (int i = 0; i < WORDS; ++i) {
+            if (b4[static_cast<std::size_t>(i)] &
+                b5[static_cast<std::size_t>(i)]) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool BitBoard::winsAt(int color, int sq) const {
+    const auto& bb = color == 0 ? black_ : white_;
+    constexpr int DIRS[4] = {1, ROW_W, ROW_W + 1, ROW_W - 1};
+    for (const int d : DIRS) {
+        const int fwd = detail::countLen(bb, sq, d);
+        const int bwd = detail::countLen(bb, sq, -d);
+        if (fwd + bwd - 1 >= 5) return true;
+    }
+    return false;
+}
+
+void BitBoard::genMovesNear(std::vector<int>& out) const {
+    genMovesNearRadius(out, 2);
+}
+
+void BitBoard::genMovesNearRadius(std::vector<int>& out, int radius) const {
+    out.clear();
+    std::array<std::uint64_t, WORDS> occ{};
+    for (int i = 0; i < WORDS; ++i) {
+        occ[static_cast<std::size_t>(i)] =
+            black_[static_cast<std::size_t>(i)] | white_[static_cast<std::size_t>(i)];
+    }
+    std::array<bool, SIZE> seen{};
+    seen.fill(false);
+    const auto& NEI = detail::neighborsR(radius);
+    for (int w = 0; w < WORDS; ++w) {
+        std::uint64_t bits = occ[static_cast<std::size_t>(w)];
+        while (bits) {
+            const int k = __builtin_ctzll(bits);
+            bits &= bits - 1;
+            const int sq = w * 64 + k;
+            if (sq >= SIZE) continue;
+            const auto& cell = NEI[static_cast<std::size_t>(sq)];
+            for (int j = 0; j < cell.cnt; ++j) {
+                const int nb = cell.n[static_cast<std::size_t>(j)];
+                if (!seen[static_cast<std::size_t>(nb)] && isEmpty(nb)) {
+                    seen[static_cast<std::size_t>(nb)] = true;
+                    out.push_back(nb);
+                }
+            }
+        }
+    }
+    // Empty board. Under Outer-Open the first move must lie in the outer two
+    // rows/columns; under plain freestyle (Gomocup, Botzone) there is no such
+    // restriction and the centre is far stronger, so offer a small central
+    // region instead of the whole 225-square board.
+    if (out.empty()) {
+        if (outerOpenRule()) {
+            for (int br = 0; br < N; ++br) {
+                for (int bc = 0; bc < N; ++bc) {
+                    if (br < 2 || br >= N - 2 || bc < 2 || bc >= N - 2) {
+                        out.push_back(sqOf(br, bc));
+                    }
+                }
+            }
+        } else {
+            const int mid = N / 2;
+            for (int br = mid - 2; br <= mid + 2; ++br) {
+                for (int bc = mid - 2; bc <= mid + 2; ++bc) {
+                    if (br >= 0 && br < N && bc >= 0 && bc < N) {
+                        out.push_back(sqOf(br, bc));
+                    }
+                }
+            }
+        }
+    }
+}
+
+void BitBoard::fillBoard(const Board& b) {
+    clear();
+    for (int br = 0; br < N; ++br) {
+        for (int bc = 0; bc < N; ++bc) {
+            const Cell c = b.cell({br, bc});
+            if (c == Cell::Black) {
+                place(0, sqOf(br, bc));
+            } else if (c == Cell::White) {
+                place(1, sqOf(br, bc));
+            }
+        }
+    }
+}
+
+}  // namespace oog

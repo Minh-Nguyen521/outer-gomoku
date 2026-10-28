@@ -1,0 +1,37 @@
+(game "Outer-Open Gomoku"
+    (players 2)
+    (equipment
+        {
+        (board (square 15) use:Vertex)
+        (piece "Marker" Each)
+        }
+    )
+    (rules
+        phases:{
+        (phase "Opening"
+            (play (move Add (to (expand (sites Outer)))))
+            (nextPhase "General")
+        )
+        (phase "General"
+            (play (move Add (to (sites Empty))))
+        )
+        }
+        (end (if (is Line 5 All) (result Mover Win)))
+    )
+)
+
+//------------------------------------------------------------------------------
+
+(metadata
+    (info
+        {
+        (description "Freestyle Gomoku with the Outer-Open rule: Black's first move must be placed within the outer two rows or columns of the board. Five or more in a row wins.")
+        (rules "Played on a 15x15 board. Black's first move must be within the outer two rows or columns. Players alternate placing stones; five or more in a row (orthogonal or diagonal) wins.")
+        }
+    )
+    (graphics {
+        (board Style Go)
+        (player Colour P1 (colour Black))
+        (player Colour P2 (colour White))
+    })
+)

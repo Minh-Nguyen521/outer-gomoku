@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# AlphaGomoku 5.8.4 -- older release with FULL-PRECISION networks (5.5 MB vs
+# 5.9.3's 3.0 MB, same 8x128 architecture, so 5.9.3 ships quantised weights).
+# Higher per-evaluation accuracy but roughly half the node rate under
+# emulation (65 vs 136 n/s). Kept so precision-vs-throughput can be settled by
+# playing the two versions against each other rather than assumed.
+exec docker run --rm -i --platform linux/amd64 \
+    -v "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)":/w -w /w \
+    oog-ag:latest ./pbrain-AlphaGomoku "$@"

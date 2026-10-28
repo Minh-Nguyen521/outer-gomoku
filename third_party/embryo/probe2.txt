@@ -1,0 +1,5 @@
+START 15
+INFO rule 1
+INFO timeout_turn 1000
+INFO timeout_match 0
+TURN 7,7

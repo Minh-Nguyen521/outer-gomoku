@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Run a Windows Gomocup engine under Wine as an opponent for tools/match.py.
+#
+#   wine-engine <dir-under-third_party> <exe-name>
+#
+# e.g. third_party/wine-engine starpoint pbrain-starpoint_freestyle-15.exe
+#
+# Windows x86 binaries run under Wine inside a linux/amd64 container, which
+# OrbStack backs with Rosetta. Two translation layers sounds fatal but the
+# measured cost is small: KATAGOMO26 does ~56 visits/sec here against our
+# natively-built KataGomo's ~48, and JAX25 manages ~174/sec.
+#
+# Two things this handles that cost real games when missing:
+#   * `wineboot -i` warms the prefix BEFORE the manager starts timing. The
+#     first call otherwise pays prefix creation plus model load, which reads
+#     as a catastrophically slow engine (an early probe suggested 2 visits/sec
+#     for KATAGOMO26; the true figure was 28x higher).
+#   * stderr is discarded. These engines print Wine/DirectX noise such as
+#     "Failed to create DXGI factory." on stdout-adjacent streams, and any
+#     stray line can be read as a move reply and desynchronise the protocol.
+#
+# The container is created per game, not per move, so startup is amortised.
+set -u
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENGDIR="$DIR/${1:?usage: wine-engine <dir> <exe>}"
+EXE="${2:?usage: wine-engine <dir> <exe>}"
+[ -d "$ENGDIR" ] || { echo "no such engine dir: $ENGDIR" >&2; exit 1; }
+
+# Name the container after this wrapper's PID. `exec` keeps the PID, so the
+# docker client IS this process -- which makes orphans trivially identifiable:
+# a container named oogwine-<pid> whose <pid> is gone was abandoned.
+#
+# This matters because `--rm` only fires when the docker CLIENT exits cleanly.
+# SIGKILL the wrapper (which is how matches get stopped here) and the container
+# detaches and keeps running, holding a CPU share and a Wine prefix. Reap them
+# with tools/reap_wine.sh.
+exec docker run --rm -i --name "oogwine-$$" --platform linux/amd64 \
+    -v "$ENGDIR:/w" -w /w \
+    -e WINEDEBUG=-all -e WINEPREFIX=/tmp/wp -e XDG_RUNTIME_DIR=/tmp/xdg \
+    oog-wine:latest \
+    sh -c "mkdir -p /tmp/xdg && wine wineboot -i >/dev/null 2>&1;
+           exec wine '$EXE' 2>/dev/null"

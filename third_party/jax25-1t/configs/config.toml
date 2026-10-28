@@ -1,0 +1,40 @@
+[eval]
+evaluator_cache_capacity = 100000
+
+eval_batch_size = 4
+ort_intra_op_num_threads = 1
+device = "cpu"
+device_ids = [0]
+
+[eval.model]
+Freestyle = "models/dbt-320-2-111111111111111222224444-hardswish-se-1258872000-1258872000.onnx"
+Standard = "models/dbt-320-2-111111111111111222224444-hardswish-se-1258872000-1258872000.onnx"
+Renju = "models/dbt-320-2-111111111111111222224444-hardswish-se-1258872000-1258872000.onnx"
+StandardCaro = "models/dbt-320-2-111111111111111222224444-hardswish-se-1258872000-1258872000.onnx"
+
+[env]
+area_candidate_range = 3
+line_candidate_range = 5
+
+[search]
+num_search_threads = 1
+search_batch_size = 4
+
+c_puct_init = 1.5
+c_puct_base = 2000
+virtual_loss_index = 0.4
+fpu_reduction_min = 0.025
+fpu_reduction_max = 0.1
+
+visits_limit = 100000
+move_temperature = 0.2
+
+fast_search_visits_threshold = 400
+fast_search_best_action_visits_proportion_threshold = 0.98
+fast_search_win_rate_threshold = 0.98
+fast_search_draw_rate_threshold = 0.95
+
+search_time_reduction = 1
+
+[debug]
+print_move = true

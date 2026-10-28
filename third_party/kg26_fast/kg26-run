@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# KATAGOMO26 (Gomocup 2026 release) as an opponent for tools/match.py.
+#
+# A Windows x86 binary running under Wine inside a linux/amd64 container,
+# which OrbStack backs with Rosetta. Two translation layers sounds fatal, but
+# measured steady-state it does ~42 visits/sec against our natively-built
+# KataGomo's ~48 -- the emulation cost is small. (An early probe suggested 2
+# visits/sec; that was measuring Wine prefix creation and ONNX model load on
+# the first call, not search. Hence `wineboot -i` below to warm the prefix
+# before the manager starts timing.)
+#
+# Why it is worth having:
+#   * speaks the Gomocup protocol natively -- no GTP bridge, so none of the
+#     bridge's failure modes (PASS handling, coordinate mapping) apply;
+#   * its net (b11c96h3tfrs_fs15x) was trained for FREESTYLE 15x15, matching
+#     our board exactly, unlike our teacher's 20x20 net;
+#   * CPU-only by design ("special version for Gomocup"), so unlike our
+#     GPU-bound KataGomo it is a legitimate tournament-hardware opponent;
+#   * it is the Gom2026 branch -- newer than the Gom2024 we built ourselves.
+#
+# Note the container is created per game, not per move, so image startup and
+# Wine prefix creation are amortised across the whole game.
+set -u
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec docker run --rm -i --platform linux/amd64 \
+    -v "$DIR:/w" -w /w \
+    -e WINEDEBUG=-all -e WINEPREFIX=/tmp/wp -e XDG_RUNTIME_DIR=/tmp/xdg \
+    oog-wine:latest \
+    sh -c 'mkdir -p /tmp/xdg && wine wineboot -i >/dev/null 2>&1;
+           exec wine pbrain-katagomo_freestyle-15.exe 2>/dev/null'

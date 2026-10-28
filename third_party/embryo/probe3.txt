@@ -1,0 +1,8 @@
+START 15
+INFO max_memory 83886080
+INFO game_type 1
+INFO rule 1
+INFO timeout_match 30000
+INFO timeout_turn 2000
+INFO time_left 30000
+BEGIN

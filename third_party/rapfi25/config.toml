@@ -1,0 +1,86 @@
+[requirement]
+# specify the minimal version of rapfi this config suits to
+min_version = [0,43,1]
+
+[general]
+# Reload config file on each move
+reload_config_each_move = false
+
+# Clear TT after config is loaded
+clear_hash_after_config_loaded = false
+
+# Default thread number if not specified (0 means use all hardware concurrency)
+default_thread_num = 1
+
+# Output message mode (Options are [normal, brief, ucilike, none])
+message_mode = "normal"
+
+# Coordinate convertion mode (Options are [none, X_flipY, flipY_X])
+# For Piskvork, choose "none".
+# For Yixin-Board GUI, choose "flipY_X".
+coord_conversion_mode = "none"
+
+# Default candidate range (Options are [square2, square2_line3, square3, square3_line4, square4, full_board])
+default_candidate_range = "square3_line4"
+
+# Memory reserved for stuff other than hash table in max_memory option
+memory_reserved_mb = [40, 40, 65]
+
+# Default transposition table size in KB
+default_tt_size_kb = 65536
+
+
+[model]
+binary_file = "model210901.bin"
+
+
+[model.evaluator]
+# Type of the evaluator (Options are [mix9nnue, mix9litennue, mix9svqnnue])
+type = "mix9svqnnue"
+
+# The winning rate of black when the game is a draw, in [0, 1] (default is 0.5).
+draw_black_winrate = 0.5
+
+# The ratio of adjust draw rate, in [0, 1] (default is 1.0).
+draw_ratio = 1.0
+
+# The path of weights for different board sizes and rules. Weights are searched in order.
+# For mix9svqnnue
+[[model.evaluator.weights]]
+weight_file = "mix9svqfreestyle_bsmix.bin.lz4"
+[[model.evaluator.weights]]
+weight_file = "mix9svqstandard_bs15.bin.lz4"
+[[model.evaluator.weights]]
+weight_file_black = "mix9svqrenju_bs15_black.bin.lz4"
+weight_file_white = "mix9svqrenju_bs15_white.bin.lz4"
+
+
+[search]
+# Whether to enable aspiration window
+aspiration_window = true
+
+# Number of iterations after we found a mate
+num_iteration_after_mate = 24
+
+# Number of iterations after we found only one non-losing move at root
+num_iteration_after_singular_root = 24
+
+# Max depth to search (in range [2,200])
+max_search_depth = 99
+
+
+[search.timectl]
+# Number of moves spared for the rest of game
+match_space = 21.0
+
+# Minimum number of moves spared for the rest of game
+match_space_min = 7.0
+
+# Average branch factor to whether next depth has enough time
+average_branch_factor = 1.7
+
+# Exit search if turn time is used more than this ratio (even given ample match time)
+advanced_stop_ratio = 0.9
+
+# Plan time management at most this many moves ahead
+move_horizon = 64

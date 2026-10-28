@@ -1,0 +1,57 @@
+{
+  "version": "5.8.4",
+  "protocol": "gomocup",
+  "use_logging": false,
+  "always_ponder": false,
+  "swap2_openings_file": "swap2_openings.json",
+  "conv_networks": {
+    "freestyle": "freestyle_conv_8x128.bin",
+    "freestyle_15": "freestyle_conv_8x128_15x15.bin",
+    "standard": "standard_conv_8x128.bin",
+    "renju": "renju_conv_8x128.bin",
+    "caro5": "caro5_conv_8x128.bin",
+    "caro6": "caro6_conv_8x128.bin"
+  },
+  "nnue_networks": {
+    "freestyle": "",
+    "freestyle_15": "",
+    "standard": "",
+    "renju": "",
+    "caro5": "",
+    "caro6": ""
+  },
+  "use_symmetries": true,
+  "search_threads": 1,
+  "devices": [
+    {
+      "device": "CPU",
+      "batch_size": 12
+    }
+  ],
+  "search_config": {
+    "max_batch_size": 12,
+    "tree_config": {
+      "information_leak_threshold": 0.01,
+      "initial_node_cache_size": 65536,
+      "edge_bucket_size": 200000,
+      "node_bucket_size": 10000
+    },
+    "mcts_config": {
+      "edge_selector_config": {
+        "policy": "puct",
+        "init_to": "parent",
+        "noise_type": "none",
+        "noise_weight": 0,
+        "exploration_constant": 1.25,
+        "exploration_exponent": 0.5
+      },
+      "max_children": 32,
+      "policy_expansion_threshold": 1.0e-4
+    },
+    "tss_config": {
+      "mode": 2,
+      "max_positions": 1000,
+      "hash_table_size": 4194304
+    }
+  }
+}

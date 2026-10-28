@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+exec docker run --rm -i --platform linux/amd64 \
+    -v "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)":/w -w /w \
+    debian:stable-slim ./pbrain-embryo "$@"

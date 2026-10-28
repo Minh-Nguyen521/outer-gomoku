@@ -1,0 +1,12 @@
+ABOUT
+START 15
+INFO rule 0
+INFO timeout_match 60000
+INFO timeout_turn 1000
+INFO time_left 60000
+BOARD
+7,7,1
+7,8,2
+8,7,1
+6,8,2
+DONE
