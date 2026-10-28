@@ -89,6 +89,25 @@ setup() {
     nvidia-smi --query-gpu=name,memory.total --format=csv,noheader ||
         die "no GPU. Colab: Runtime > Change runtime type > GPU (T4 or better)."
 
+    # Cache check: if a pre-built MiniZero exists on Drive, restore it instead of rebuilding.
+    # This saves ~5 minutes on subsequent runs. The cache is stored at:
+    #   /content/drive/MyDrive/oog-minizero/cache/minizero_build.tar.gz
+    CACHE_TAR="$DRIVE/cache/minizero_build.tar.gz"
+    if [ -f "$CACHE_TAR" ] && [ -x "$MZ/build/$GAME/minizero_$GAME" ]; then
+        # Already restored (e.g. setup ran twice this session) -- nothing to do.
+        log "Build already present: $MZ/build/$GAME/minizero_$GAME"
+    elif [ -f "$CACHE_TAR" ]; then
+        log "Restoring cached MiniZero build from Drive..."
+        mkdir -p "$(dirname "$MZ")"
+        tar -xzf "$CACHE_TAR" -C "$(dirname "$MZ")"
+        if [ -x "$MZ/build/$GAME/minizero_$GAME" ]; then
+            log "Cache restored: $MZ/build/$GAME/minizero_$GAME"
+        else
+            log "Cache corrupted; will rebuild from scratch."
+            rm -rf "$MZ"
+        fi
+    fi
+
     log "System dependencies"
     # Boost 1.74 on 22.04 still has io_service. Do not upgrade it.
     apt-get update -qq
@@ -152,7 +171,16 @@ except Exception as e:
 print("  SummaryWriter, matplotlib, numpy all import")
 PY
 
-    [ -d "$MZ/minizero" ] || { log "Cloning MiniZero"; git clone --depth 1 https://github.com/rlglab/minizero.git "$MZ"; }
+    # Early exit: a full build was restored from Drive -- nothing left to do.
+    if [ -x "$MZ/build/$GAME/minizero_$GAME" ]; then
+        log "Setup complete (restored from Drive cache: $MZ)"
+        return 0
+    fi
+
+    if [ ! -d "$MZ/minizero" ]; then
+        log "Cloning MiniZero"
+        git clone --depth 1 https://github.com/rlglab/minizero.git "$MZ"
+    fi
 
     log "Making ALE/Atari optional (Gomoku does not need it)"
     python3 - "$MZ" <<'PY'
@@ -290,6 +318,24 @@ PY
         esac
     else
         echo "  WARNING: 'zero_training_name' probe failed -- inspect $BIN manually"
+    fi
+
+    # ---- Save build cache to Drive so future VMs skip clone+patch+build.
+    # Guarded by DRIVE mount: cache only when Drive is there, never fail setup
+    # because of it (e.g. someone running setup before mounting).
+    if [ -d "$(dirname "$DRIVE")" ]; then
+        log "Caching build to Drive: $CACHE_TAR"
+        mkdir -p "$(dirname "$CACHE_TAR")"
+        # Only source + binary, not training runs or weights.
+        tar -czf "$CACHE_TAR.tmp" \
+            --exclude="$MZ/*/build/$GAME/CMakeFiles" \
+            --exclude="*.o" --exclude="*.pt" --exclude="*.pkl" \
+            -C "$(dirname "$MZ")" "$(basename "$MZ")" \
+            && mv -f "$CACHE_TAR.tmp" "$CACHE_TAR" \
+            && echo "  cached $(du -h "$CACHE_TAR" | cut -f1) to Drive" \
+            || { echo "  WARNING: failed to cache build to Drive (non-fatal)"; rm -f "$CACHE_TAR.tmp"; }
+    else
+        echo "  (Drive not mounted -- skipping build cache)"
     fi
 }
 
