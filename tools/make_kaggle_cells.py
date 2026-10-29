@@ -37,10 +37,13 @@ if not GITHUB_TOKEN:
     sys.exit("set GITHUB_TOKEN or create tools/.github_token before generating")
 REPO_URL = f"https://{GITHUB_TOKEN}@github.com/Minh-Nguyen521/outer-gomoku.git"
 
-SETUP = """# ---- Cell 1: clone repo + setup (run once per session) ----
+SETUP = """%%bash
+# ---- Cell 1: clone repo + setup (run once per session) ----
 # Clones the private repo with an embedded read-only PAT, then builds MiniZero.
 # Requires Internet = ON (Settings > Internet) for apt/pip/git.
-%%bash
+# NOTE: %%bash MUST stay on the very first line -- any line before it
+# (even a comment) turns the whole cell into Python and fails with
+# "SyntaxError: invalid syntax".
 set -e
 if [ ! -d /kaggle/working/oog ]; then
     git clone --depth 1 '{repo_url}' /kaggle/working/oog
@@ -48,24 +51,25 @@ fi
 REPO=/kaggle/working/oog bash /kaggle/working/oog/tools/kaggle_minizero.sh setup
 """
 
-SMOKE = """# ---- Cell 2: smoke test, 30 iterations ----
+SMOKE = """%%bash
+# ---- Cell 2: smoke test, 30 iterations ----
 # Run this BEFORE the full 300. It proves the pipeline end to end.
-%%bash
 REPO=/kaggle/working/oog bash {remote} train 30 gmz
 """
 
-FULL = """# ---- Cell 3: the real run (Olympiad recipe) ----
+FULL = """%%bash
+# ---- Cell 3: the real run (Olympiad recipe) ----
 # 300 iterations of Gumbel MuZero. Kaggle caps a session at 12h; when it ends,
 # Save Version (keeps /kaggle/working as output), then attach that output as an
 # Input and re-run this cell to resume.
 #
 # Optional: set KAGGLE_DATASET=user/slug to auto-push checkpoints periodically.
-%%bash
 REPO=/kaggle/working/oog bash {remote} train 300 gmz
 """
 
-MATCH = """# ---- Cell 4: play the trained model against a reference engine ----
-%%bash
+MATCH = """%%bash
+# ---- Cell 4: play the trained model against a reference engine ----
+
 MODEL=$(ls -t /kaggle/working/minizero/gomoku_oo_15x15_gmz_run/model/*.pt | head -1)
 REPO=/kaggle/working/oog bash {remote} match "$MODEL"
 """
