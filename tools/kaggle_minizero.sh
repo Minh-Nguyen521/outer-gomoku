@@ -218,14 +218,13 @@ PY
     [ -x "$BIN" ] || die "no binary at $BIN"
 
     # train.py does __import__('build.<game>') expecting the CMake build dir
-    # to resolve as a namespace package. That works only until something
-    # installs the pip package 'build' (pypa), whose regular package shadows
-    # namespace resolution even with PYTHONPATH=. earlier in sys.path.
-    # Kaggle images ship pypa/build preinstalled -> ModuleNotFoundError.
-    if [ ! -f "$MZ/build/$GAME/__init__.py" ]; then
-        printf '' > "$MZ/build/$GAME/__init__.py"
-        echo "  created build/$GAME/__init__.py (fix pip 'build' shadowing)"
-    fi
+    # to resolve as a namespace package. PEP 420: a regular package found
+    # ANYWHERE later on sys.path (site-packages pip 'build' -- preinstalled
+    # on Kaggle) beats namespace portions found earlier. So make BOTH
+    # build/ and build/<game>/ regular packages (empty __init__.py).
+    for d in "$MZ/build" "$MZ/build/$GAME"; do
+        [ -f "$d/__init__.py" ] || { printf '' > "$d/__init__.py"; echo "  created $d/__init__.py"; }
+    done
 
     log "Built $BIN"
     local probe
