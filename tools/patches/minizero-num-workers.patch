@@ -1,0 +1,67 @@
+From d1a56a42e0994341f0c84f6ac2fb591384198eec Mon Sep 17 00:00:00 2001
+From: Minh-Nguyen521 <minhb2306674@student.ctu.edu.vn>
+Date: Thu, 29 Oct 2026 18:47:03 +0800
+Subject: [PATCH] quick-run: add -w/--num_workers for multiple self-play
+ workers per GPU
+
+Default remains 1 worker per GPU; -w N spawns N workers per listed GPU
+(N * batch_size * gpus parallel games). Only the first worker shows
+progress.
+---
+ tools/quick-run.sh | 24 +++++++++++++++---------
+ 1 file changed, 15 insertions(+), 9 deletions(-)
+
+diff --git a/tools/quick-run.sh b/tools/quick-run.sh
+index ce12d54..442cdc2 100755
+--- a/tools/quick-run.sh
++++ b/tools/quick-run.sh
+@@ -25,6 +25,7 @@ usage() {
+         echo "  -gen                              Generate a configure file for current settings"
+         echo "  -p,        --port                 Assign the port used by the zero-server"
+         echo "  -b,        --batch_size           Assign the batch size for self-play workers (default 64)"
++        echo "  -w,        --num_workers         Assign the number of self-play workers per GPU (default 1)"
+         echo "  -c,        --cpu_thread_per_gpu   Assign the number of CPUs for each GPU for self-play workers (default 4)"
+         echo "             --sp_progress          Show the self-play progress (default hidden)"
+         echo "             --sp_conf_str          Set additional settings for self-play workers"
+@@ -197,6 +198,7 @@ while [[ $1 ]]; do
+     -np|--name_prefix)  name_prefix=$2; shift; ;;
+     -ns|--name_suffix)  name_suffix=$2; shift; ;;
+     -b|--batch_size)    batch_size=$2; shift; ;;
++    -w|--num_workers)  sp_workers_per_gpu=$2; shift; ;;
+     -c|--cpu_thread_per_gpu|--num_threads)  num_threads=$2; shift; ;;
+     --color)            color=$2; shift; ;;
+     --sp_progress)      [[ $2 =~ true|false ]] && { sp_progress=$2; shift; } || { sp_progress=true; } ;;
+@@ -453,17 +455,21 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
+         exit 1
+     fi
+ 
+-    # launch zero sp workers (one per available GPU)
++    # launch zero sp workers (sp_workers_per_gpu per available GPU; more
++    # workers = more parallel games per iteration, bounded by VRAM/CPU)
+     SP_CUDA_VISIBLE_DEVICES=${SP_CUDA_VISIBLE_DEVICES:-$CUDA_VISIBLE_DEVICES}
++    sp_workers_per_gpu=${sp_workers_per_gpu:-1}
+     for GPU in ${SP_CUDA_VISIBLE_DEVICES//,/ }; do
+-        {
+-            [[ $sp_progress == true ]] && sp_program_quiet=false || sp_program_quiet=true
+-            [[ $sp_conf_str != *program_quiet* ]] && sp_conf_str+=${sp_conf_str:+:}program_quiet=$sp_program_quiet
+-            $launch scripts/zero-worker.sh $game $(hostname) $zero_server_port sp -b ${batch_size:-64} -c ${num_threads:-4} -g $GPU ${sp_conf_str:+-conf_str "$sp_conf_str"}
+-        } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN_SP &
+-        PID[$!]=sp$GPU
+-        unset sp_progress # only show the progress of the first sp
+-        sleep 1
++        for ((w = 0; w < sp_workers_per_gpu; w++)); do
++            {
++                [[ $sp_progress == true && $w -eq 0 ]] && sp_program_quiet=false || sp_program_quiet=true
++                [[ $sp_conf_str != *program_quiet* ]] && sp_conf_str+=${sp_conf_str:+:}program_quiet=$sp_program_quiet
++                $launch scripts/zero-worker.sh $game $(hostname) $zero_server_port sp -b ${batch_size:-64} -c ${num_threads:-4} -g $GPU ${sp_conf_str:+-conf_str "$sp_conf_str"}
++            } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN_SP &
++            PID[$!]=sp${GPU}_${w}
++            unset sp_progress # only show the progress of the first sp
++            sleep 1
++        done
+     done
+ 
+     # launch zero op worker
+-- 
+2.50.1 (Apple Git-155)
+

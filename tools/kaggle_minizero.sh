@@ -123,6 +123,11 @@ PY
         git clone --depth 1 https://github.com/rlglab/minizero.git "$MZ"
     fi
 
+    log "Applying patches (upstream lacks the -w/--num_workers flag)"
+    git -C "$MZ" apply --check "$REPO/tools/patches/minizero-num-workers.patch" 2>/dev/null \
+        && git -C "$MZ" apply "$REPO/tools/patches/minizero-num-workers.patch" \
+        || echo "  (already applied or not needed)"
+
     log "Making ALE/Atari optional (Gomoku does not need it)"
     python3 - "$MZ" <<'PY'
 import os, shutil, sys
