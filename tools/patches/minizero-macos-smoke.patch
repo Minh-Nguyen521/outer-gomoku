@@ -613,3 +613,465 @@ index 8c6cbd9..ce12d54 100755
      done
      if ! ps -p $server_pid >/dev/null; then
          if [ -e $train_dir/sgf/$zero_end_iteration.sgf ] && (( $(ls -t $train_dir/model/*.pt | wc -l) > $zero_end_iteration )); then
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 64266ad..cd07a35 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -8,17 +8,24 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto=auto")
+ 
+ find_package(Torch REQUIRED)
+ find_package(Boost COMPONENTS system thread iostreams CONFIG REQUIRED)
+-find_package(ale REQUIRED)
+-find_package(OpenCV REQUIRED)
++# ALE and OpenCV are only needed by the Atari environment; a Gomoku
++# build does not link them. REQUIRED here blocked configuring at all.
++find_package(ale QUIET)
++find_package(OpenCV QUIET)
+ 
+ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -g -Wall -mpopcnt -O3 -pthread")
++# -mpopcnt is an x86 flag and clang rejects it outright on arm64. AArch64
++# has a native popcount (CNT), so __builtin_popcount* needs no flag there.
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -g -Wall -O3 -pthread")
++if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i.86")
++    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mpopcnt")
++endif()
+ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -Wall -Wno-unused-function -O0 -pthread")
+ 
+ # for git info
+-include_directories(${PROJECT_BINARY_DIR}/git_info)
++include_directories("${CMAKE_CURRENT_SOURCE_DIR}/build/git_info" "${CMAKE_BINARY_DIR}/git_info")
+ 
+ add_subdirectory(minizero)
+ add_subdirectory(minizero/actor)
+diff --git a/minizero/actor/actor_group.cpp b/minizero/actor/actor_group.cpp
+index 1504488..3335369 100644
+--- a/minizero/actor/actor_group.cpp
++++ b/minizero/actor/actor_group.cpp
+@@ -167,12 +167,19 @@ void ActorGroup::initialize()
+ 
+ void ActorGroup::createNeuralNetworks()
+ {
+-    int num_networks = std::min(static_cast<int>(torch::cuda::device_count()), config::zero_num_parallel_games);
++    // Without CUDA, device_count() is 0 and std::min collapses this to 0,
++    // tripping the assert below. Fall back to a single CPU network --
++    // network.h already selects torch::Device("cpu") for gpu_id -1.
++    const int devices = static_cast<int>(torch::cuda::device_count());
++    int num_networks = devices > 0
++                           ? std::min(devices, config::zero_num_parallel_games)
++                           : 1;
+     assert(num_networks > 0);
+     getSharedData()->networks_.resize(num_networks);
+     getSharedData()->network_outputs_.resize(num_networks);
+     for (int gpu_id = 0; gpu_id < num_networks; ++gpu_id) {
+-        getSharedData()->networks_[gpu_id] = createNetwork(config::nn_file_name, gpu_id);
++        getSharedData()->networks_[gpu_id] =
++            createNetwork(config::nn_file_name, devices > 0 ? gpu_id : -1);
+     }
+ }
+ 
+diff --git a/minizero/console/mode_handler.cpp b/minizero/console/mode_handler.cpp
+index d2a0fe9..092be5e 100644
+--- a/minizero/console/mode_handler.cpp
++++ b/minizero/console/mode_handler.cpp
+@@ -3,8 +3,10 @@
+ #include "color_message.h"
+ #include "console.h"
+ #include "git_info.h"
++#ifdef ATARI   // Atari-only; these pull in <ale_interface.hpp>
+ #include "obs_recover.h"
+ #include "obs_remover.h"
++#endif
+ #include "ostream_redirector.h"
+ #include "random.h"
+ #include "zero_server.h"
+@@ -22,8 +24,10 @@ ModeHandler::ModeHandler()
+     RegisterFunction("zero_server", this, &ModeHandler::runZeroServer);
+     RegisterFunction("zero_training_name", this, &ModeHandler::runZeroTrainingName);
+     RegisterFunction("env_test", this, &ModeHandler::runEnvTest);
++#ifdef ATARI
+     RegisterFunction("remove_obs", this, &ModeHandler::runRemoveObs);
+     RegisterFunction("recover_obs", this, &ModeHandler::runRecoverObs);
++#endif
+ }
+ 
+ void ModeHandler::run(int argc, char* argv[])
+@@ -193,16 +197,23 @@ void ModeHandler::runEnvTest()
+ 
+ void ModeHandler::runRemoveObs()
+ {
++#ifdef ATARI
++
+     std::string obs_file_path;
+     std::cin >> obs_file_path;
+ 
+     minizero::env::atari::ObsRemover ob;
+     ob.initialize();
+     ob.run(obs_file_path);
++#else
++    std::cerr << "runRemoveObs: Atari-only mode, not built" << std::endl;
++#endif
+ }
+ 
+ void ModeHandler::runRecoverObs()
+ {
++#ifdef ATARI
++
+     std::string obs_file_path;
+     std::cin >> obs_file_path;
+ 
+@@ -213,6 +224,9 @@ void ModeHandler::runRecoverObs()
+ #else
+     std::cout << "Currently, only support recover observation for atari games" << std::endl;
+ #endif
++#else
++    std::cerr << "runRecoverObs: Atari-only mode, not built" << std::endl;
++#endif
+ }
+ 
+ } // namespace minizero::console
+diff --git a/minizero/environment/CMakeLists.txt b/minizero/environment/CMakeLists.txt
+index edfeac4..e5f85e9 100644
+--- a/minizero/environment/CMakeLists.txt
++++ b/minizero/environment/CMakeLists.txt
+@@ -1,4 +1,11 @@
+ file(GLOB_RECURSE SRCS *.cpp)
++# The Atari environment needs ALE headers, which are not installed and are
++# irrelevant to a Gomoku build. Drop those sources (and the ale link below)
++# when ALE is absent, rather than requiring an Atari toolchain to play
++# Gomoku.
++if(NOT ale_FOUND)
++    list(FILTER SRCS EXCLUDE REGEX "/atari/")
++endif()
+ 
+ add_library(environment ${SRCS})
+ target_include_directories(
+@@ -32,6 +39,6 @@ target_link_libraries(
+     environment
+     config
+     utils
+-    ale::ale-lib
++    $<$<BOOL:${ale_FOUND}>:ale::ale-lib>
+     ${OpenCV_LIBS}
+ )
+diff --git a/minizero/environment/gomoku/gomoku.h b/minizero/environment/gomoku/gomoku.h
+index 1db98cf..b56e161 100644
+--- a/minizero/environment/gomoku/gomoku.h
++++ b/minizero/environment/gomoku/gomoku.h
+@@ -56,7 +56,17 @@ private:
+ class GomokuEnvLoader : public BaseBoardEnvLoader<GomokuAction, GomokuEnv> {
+ public:
+     std::vector<float> getActionFeatures(const int pos, utils::Rotation rotation = utils::Rotation::kRotationNone) const override;
+-    inline std::vector<float> getValue(const int pos) const { return {getReturn()}; }
++    // Prefer a per-position teacher value tag KV[..] (same Black-perspective
++    // convention as RE: +1 Black wins, -1 White wins) over the game outcome,
++    // for replay/warm-start data. Distinct tag from MiniZero's own V (root Q,
++    // side-to-move) written by self-play, so pipelines never collide.
++    inline std::vector<float> getValue(const int pos) const
++    {
++        if (pos >= 0 && pos < static_cast<int>(getActionPairs().size()) && getActionPairs()[pos].second.count("KV")) {
++            return {std::stof(getActionPairs()[pos].second.at("KV"))};
++        }
++        return {getReturn()};
++    }
+     inline std::string name() const override { return kGomokuName + (config::env_gomoku_rule == "outer_open" ? "_oo_" : "_") + std::to_string(getBoardSize()) + "x" + std::to_string(getBoardSize()); }
+     inline int getPolicySize() const override { return getBoardSize() * getBoardSize(); }
+     inline int getRotatePosition(int position, utils::Rotation rotation) const override { return utils::getPositionByRotating(rotation, position, getBoardSize()); };
+diff --git a/minizero/learner/data_loader.cpp b/minizero/learner/data_loader.cpp
+index 9e95e5f..381ba92 100644
+--- a/minizero/learner/data_loader.cpp
++++ b/minizero/learner/data_loader.cpp
+@@ -84,6 +84,21 @@ std::string DataLoaderSharedData::getNextEnvString()
+     return env_string;
+ }
+ 
++bool DataLoaderSharedData::hasEnvStrings()
++{
++    // env_strings_ is mutated by getNextEnvString() in other worker threads;
++    // reading .empty() without the mutex is a data race (UB) and can make a
++    // worker wrongly fall into the sampling branch during data loading.
++    std::lock_guard<std::mutex> lock(mutex_);
++    return !env_strings_.empty();
++}
++
++bool DataLoaderSharedData::isSampleMode()
++{
++    std::lock_guard<std::mutex> lock(mutex_);
++    return sample_mode_;
++}
++
+ int DataLoaderSharedData::getNextBatchIndex()
+ {
+     std::lock_guard<std::mutex> lock(mutex_);
+@@ -98,10 +113,10 @@ void DataLoaderThread::initialize()
+ 
+ void DataLoaderThread::runJob()
+ {
+-    if (!getSharedData()->env_strings_.empty()) {
+-        while (addEnvironmentLoader()) {}
+-    } else {
++    if (getSharedData()->isSampleMode()) {
+         while (sampleData()) {}
++    } else {
++        while (addEnvironmentLoader()) {}
+     }
+ }
+ 
+@@ -215,8 +230,12 @@ void DataLoader::initialize()
+ 
+ void DataLoader::loadDataFromFile(const std::string& file_name)
+ {
+-    std::ifstream fin(file_name, std::ifstream::in);
+-    for (std::string content; std::getline(fin, content);) { getSharedData()->env_strings_.push_back(content); }
++    {
++        std::lock_guard<std::mutex> lock(getSharedData()->mutex_);
++        getSharedData()->sample_mode_ = false;
++        std::ifstream fin(file_name, std::ifstream::in);
++        for (std::string content; std::getline(fin, content);) { getSharedData()->env_strings_.push_back(content); }
++    }
+ 
+     for (auto& t : slave_threads_) { t->start(); }
+     for (auto& t : slave_threads_) { t->finish(); }
+@@ -225,7 +244,11 @@ void DataLoader::loadDataFromFile(const std::string& file_name)
+ 
+ void DataLoader::sampleData()
+ {
+-    getSharedData()->batch_index_ = 0;
++    {
++        std::lock_guard<std::mutex> lock(getSharedData()->mutex_);
++        getSharedData()->batch_index_ = 0;
++        getSharedData()->sample_mode_ = true;
++    }
+     for (auto& t : slave_threads_) { t->start(); }
+     for (auto& t : slave_threads_) { t->finish(); }
+ }
+diff --git a/minizero/learner/data_loader.h b/minizero/learner/data_loader.h
+index b693305..a211855 100644
+--- a/minizero/learner/data_loader.h
++++ b/minizero/learner/data_loader.h
+@@ -51,12 +51,15 @@ public:
+ class DataLoaderSharedData : public utils::BaseSharedData {
+ public:
+     std::string getNextEnvString();
++    bool hasEnvStrings();
++    bool isSampleMode();
+     int getNextBatchIndex();
+ 
+     virtual void createDataPtr() { data_ptr_ = std::make_shared<BatchDataPtr>(); }
+     inline std::shared_ptr<BatchDataPtr> getDataPtr() { return std::static_pointer_cast<BatchDataPtr>(data_ptr_); }
+ 
+     int batch_index_;
++    bool sample_mode_ = false;
+     ReplayBuffer replay_buffer_;
+     std::mutex mutex_;
+     std::deque<std::string> env_strings_;
+diff --git a/minizero/learner/pybind.cpp b/minizero/learner/pybind.cpp
+index 2a3b1e1..4610587 100644
+--- a/minizero/learner/pybind.cpp
++++ b/minizero/learner/pybind.cpp
+@@ -201,15 +201,44 @@ PYBIND11_MODULE(minizero_py, m)
+             },
+             py::call_guard<py::gil_scoped_release>())
+         .def(
+-            "sample_data", [](learner::DataLoader& data_loader, py::array_t<float>& features, py::array_t<float>& action_features, py::array_t<float>& policy, py::array_t<float>& value, py::array_t<float>& reward, py::array_t<float>& loss_scale, py::array_t<int>& sampled_index) {
+-                data_loader.getSharedData()->getDataPtr()->features_ = static_cast<float*>(features.request().ptr);
+-                data_loader.getSharedData()->getDataPtr()->action_features_ = static_cast<float*>(action_features.request().ptr);
+-                data_loader.getSharedData()->getDataPtr()->policy_ = static_cast<float*>(policy.request().ptr);
+-                data_loader.getSharedData()->getDataPtr()->value_ = static_cast<float*>(value.request().ptr);
+-                data_loader.getSharedData()->getDataPtr()->reward_ = static_cast<float*>(reward.request().ptr);
+-                data_loader.getSharedData()->getDataPtr()->loss_scale_ = static_cast<float*>(loss_scale.request().ptr);
+-                data_loader.getSharedData()->getDataPtr()->sampled_index_ = static_cast<int*>(sampled_index.request().ptr);
++            "sample_data", [](learner::DataLoader& data_loader, py::object features, py::object action_features, py::object policy, py::object value, py::object reward, py::object loss_scale, py::object sampled_index) {
++                // Extract raw pointers WHILE HOLDING the GIL: obj.cast<>(),
++                // .request() and py::object copy/move all touch Python
++                // refcounts. Upstream releases the GIL for the whole lambda
++                // via py::call_guard, and with pybind11 >= 2.13 (Python 3.13+
++                // opaque frames) the first inc_ref throws gilstate_error,
++                // which unwinds through the released-GIL frame and crashes
++                // the process (SIGSEGV/SIGABRT) -- this killed the learner
++                // after every self-play iteration. Acquire the GIL only around
++                // the pointer extraction, then release it for sampleData().
++                float *features_ptr, *action_features_ptr, *policy_ptr, *value_ptr, *reward_ptr, *loss_scale_ptr;
++                int* sampled_index_ptr = nullptr;
++                {
++                    py::gil_scoped_acquire acquire;
++                    auto get_ptr = [](py::object& obj) -> float* {
++                        if (obj.is_none()) { return nullptr; }
++                        return static_cast<float*>(obj.cast<py::array_t<float>>().request().ptr);
++                    };
++                    features_ptr = get_ptr(features);
++                    action_features_ptr = get_ptr(action_features);
++                    policy_ptr = get_ptr(policy);
++                    value_ptr = get_ptr(value);
++                    reward_ptr = get_ptr(reward);
++                    loss_scale_ptr = get_ptr(loss_scale);
++                    if (!sampled_index.is_none()) {
++                        sampled_index_ptr = static_cast<int*>(sampled_index.cast<py::array_t<int>>().request().ptr);
++                    }
++                }
++                data_loader.getSharedData()->getDataPtr()->features_ = features_ptr;
++                data_loader.getSharedData()->getDataPtr()->action_features_ = action_features_ptr;
++                data_loader.getSharedData()->getDataPtr()->policy_ = policy_ptr;
++                data_loader.getSharedData()->getDataPtr()->value_ = value_ptr;
++                data_loader.getSharedData()->getDataPtr()->reward_ = reward_ptr;
++                data_loader.getSharedData()->getDataPtr()->loss_scale_ = loss_scale_ptr;
++                if (sampled_index_ptr) {
++                    data_loader.getSharedData()->getDataPtr()->sampled_index_ = sampled_index_ptr;
++                }
++                py::gil_scoped_release release;
+                 data_loader.sampleData();
+-            },
+-            py::call_guard<py::gil_scoped_release>());
++            });
+ }
+diff --git a/minizero/utils/base_server.h b/minizero/utils/base_server.h
+index 45c48a6..aa62c37 100644
+--- a/minizero/utils/base_server.h
++++ b/minizero/utils/base_server.h
+@@ -14,7 +14,7 @@ using namespace boost::placeholders;
+ 
+ class ConnectionHandler : public boost::enable_shared_from_this<ConnectionHandler> {
+ public:
+-    ConnectionHandler(boost::asio::io_service& io_service)
++    ConnectionHandler(boost::asio::io_context& io_service)
+         : is_closed_(false),
+           socket_(io_service),
+           strand_(io_service)
+@@ -28,7 +28,7 @@ public:
+         if (message.empty() || isClosed()) { return; }
+ 
+         message += (message.back() == '\n' ? "" : "\n");
+-        strand_.dispatch(boost::bind(&ConnectionHandler::doWrite, shared_from_this(), message));
++        boost::asio::dispatch(strand_, boost::bind(&ConnectionHandler::doWrite, shared_from_this(), message));
+     }
+ 
+     void startRead()
+@@ -98,7 +98,7 @@ private:
+     bool is_closed_;
+     std::queue<std::string> message_queue_;
+     boost::asio::ip::tcp::socket socket_;
+-    boost::asio::io_service::strand strand_;
++    boost::asio::io_context::strand strand_;
+     boost::asio::streambuf read_buffer_;
+ };
+ 
+@@ -106,7 +106,7 @@ template <class _ConnectionHandler>
+ class BaseServer {
+ public:
+     BaseServer(int port)
+-        : work_(io_service_),
++        : work_(boost::asio::make_work_guard(io_service_)),
+           acceptor_(io_service_)
+     {
+         boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::tcp::v4(), port);
+@@ -164,8 +164,10 @@ protected:
+ 
+     boost::mutex worker_mutex_;
+     boost::thread_group thread_pool_;
+-    boost::asio::io_service io_service_;
+-    boost::asio::io_service::work work_;
++    boost::asio::io_context io_service_;
++    // io_service::work was removed in Boost 1.87; executor_work_guard
++    // is its replacement and serves the same purpose.
++    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_;
+     boost::asio::ip::tcp::acceptor acceptor_;
+     std::vector<boost::shared_ptr<_ConnectionHandler>> connections_;
+ };
+diff --git a/minizero/zero/zero_server.cpp b/minizero/zero/zero_server.cpp
+index 8ec5c5a..1ad4cea 100644
+--- a/minizero/zero/zero_server.cpp
++++ b/minizero/zero/zero_server.cpp
+@@ -402,7 +402,7 @@ void ZeroServer::keepAlive()
+ 
+ void ZeroServer::startKeepAlive()
+ {
+-    keep_alive_timer_.expires_from_now(boost::posix_time::minutes(1));
++    keep_alive_timer_.expires_after(std::chrono::minutes(1));
+     keep_alive_timer_.async_wait(boost::bind(&ZeroServer::keepAlive, this));
+ }
+ 
+diff --git a/minizero/zero/zero_server.h b/minizero/zero/zero_server.h
+index cc854ba..52211e3 100644
+--- a/minizero/zero/zero_server.h
++++ b/minizero/zero/zero_server.h
+@@ -95,7 +95,7 @@ public:
+ 
+ class ZeroWorkerHandler : public utils::ConnectionHandler {
+ public:
+-    ZeroWorkerHandler(boost::asio::io_service& io_service, ZeroWorkerSharedData& shared_data)
++    ZeroWorkerHandler(boost::asio::io_context& io_service, ZeroWorkerSharedData& shared_data)
+         : ConnectionHandler(io_service),
+           is_idle_(false),
+           shared_data_(shared_data)
+@@ -146,7 +146,7 @@ protected:
+ 
+     int iteration_;
+     ZeroWorkerSharedData shared_data_;
+-    boost::asio::deadline_timer keep_alive_timer_;
++    boost::asio::steady_timer keep_alive_timer_;  // was deadline_timer (Boost.DateTime)
+ 
+     std::vector<int> latest_game_lengths_;
+     std::vector<float> latest_game_returns_;
+diff --git a/scripts/start-container.sh b/scripts/start-container.sh
+index 76659c8..e30a353 100755
+--- a/scripts/start-container.sh
++++ b/scripts/start-container.sh
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/opt/homebrew/bin/bash
+ set -e
+ 
+ usage()
+diff --git a/tools/quick-run.sh b/tools/quick-run.sh
+index ce12d54..442cdc2 100755
+--- a/tools/quick-run.sh
++++ b/tools/quick-run.sh
+@@ -25,6 +25,7 @@ usage() {
+         echo "  -gen                              Generate a configure file for current settings"
+         echo "  -p,        --port                 Assign the port used by the zero-server"
+         echo "  -b,        --batch_size           Assign the batch size for self-play workers (default 64)"
++        echo "  -w,        --num_workers         Assign the number of self-play workers per GPU (default 1)"
+         echo "  -c,        --cpu_thread_per_gpu   Assign the number of CPUs for each GPU for self-play workers (default 4)"
+         echo "             --sp_progress          Show the self-play progress (default hidden)"
+         echo "             --sp_conf_str          Set additional settings for self-play workers"
+@@ -197,6 +198,7 @@ while [[ $1 ]]; do
+     -np|--name_prefix)  name_prefix=$2; shift; ;;
+     -ns|--name_suffix)  name_suffix=$2; shift; ;;
+     -b|--batch_size)    batch_size=$2; shift; ;;
++    -w|--num_workers)  sp_workers_per_gpu=$2; shift; ;;
+     -c|--cpu_thread_per_gpu|--num_threads)  num_threads=$2; shift; ;;
+     --color)            color=$2; shift; ;;
+     --sp_progress)      [[ $2 =~ true|false ]] && { sp_progress=$2; shift; } || { sp_progress=true; } ;;
+@@ -453,17 +455,21 @@ if [[ $mode == train ]]; then # ================================ TRAIN =========
+         exit 1
+     fi
+ 
+-    # launch zero sp workers (one per available GPU)
++    # launch zero sp workers (sp_workers_per_gpu per available GPU; more
++    # workers = more parallel games per iteration, bounded by VRAM/CPU)
+     SP_CUDA_VISIBLE_DEVICES=${SP_CUDA_VISIBLE_DEVICES:-$CUDA_VISIBLE_DEVICES}
++    sp_workers_per_gpu=${sp_workers_per_gpu:-1}
+     for GPU in ${SP_CUDA_VISIBLE_DEVICES//,/ }; do
+-        {
+-            [[ $sp_progress == true ]] && sp_program_quiet=false || sp_program_quiet=true
+-            [[ $sp_conf_str != *program_quiet* ]] && sp_conf_str+=${sp_conf_str:+:}program_quiet=$sp_program_quiet
+-            $launch scripts/zero-worker.sh $game $(hostname) $zero_server_port sp -b ${batch_size:-64} -c ${num_threads:-4} -g $GPU ${sp_conf_str:+-conf_str "$sp_conf_str"}
+-        } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN_SP &
+-        PID[$!]=sp$GPU
+-        unset sp_progress # only show the progress of the first sp
+-        sleep 1
++        for ((w = 0; w < sp_workers_per_gpu; w++)); do
++            {
++                [[ $sp_progress == true && $w -eq 0 ]] && sp_program_quiet=false || sp_program_quiet=true
++                [[ $sp_conf_str != *program_quiet* ]] && sp_conf_str+=${sp_conf_str:+:}program_quiet=$sp_program_quiet
++                $launch scripts/zero-worker.sh $game $(hostname) $zero_server_port sp -b ${batch_size:-64} -c ${num_threads:-4} -g $GPU ${sp_conf_str:+-conf_str "$sp_conf_str"}
++            } 2>&1 | tee >(watchdog "^Failed to|Segmentation fault|Killed|Aborted|^[A-Za-z.]+Error") | colorize OUT_TRAIN_SP &
++            PID[$!]=sp${GPU}_${w}
++            unset sp_progress # only show the progress of the first sp
++            sleep 1
++        done
+     done
+ 
+     # launch zero op worker

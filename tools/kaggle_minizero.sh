@@ -292,10 +292,19 @@ train() {
     echo "  notebook's output as an Input and re-run this cell to resume."
     echo
 
+    # All visible GPUs, one self-play worker per GPU (plus -w to multiply; see
+    # tools/quick-run.sh usage). Default quick-run behavior enumerates GPUs
+    # only when CUDA_VISIBLE_DEVICES is unset, so derive it from nvidia-smi
+    # rather than hardcoding "-g 0" (which pinned worker count to 1 GPU even
+    # on T4 x2).
+    local gpus
+    gpus="$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | tr '\n' ',' | sed 's/,$//')"
+    [ -n "$gpus" ] || gpus=0
+
     cd "$MZ"
     ansi_filter() { sed -e 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' -e 's/\x1b[()][0-9A-B]//g' -e 's/\x1b[@-~]//g'; }
     printf 'Cy' | tools/quick-run.sh train "$GAME" "$alg" "$iters" \
-        -n "$run" -g 0 --sp_progress \
+        -n "$run" -g "$gpus" --sp_progress \
         -conf_str "env_board_size=$BOARD:env_gomoku_rule=$RULE:program_use_color_message=false" \
         "${extra_args[@]}" \
         2>&1 | ansi_filter
