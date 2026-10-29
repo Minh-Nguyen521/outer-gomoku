@@ -339,21 +339,21 @@ void PiskvorkBrain::undo(int n) {
 
 long long PiskvorkBrain::moveBudgetMs() const {
     constexpr long long kDefaultTurn = 5000;
-    constexpr std::int64_t kMinBudget = 50;
+    constexpr long long kMinBudget = 50;
     constexpr long long kMaxBudget = 60000;
     constexpr long long kUnlimited = 2147483647;
 
     long long budget = kDefaultTurn;
     if (haveTimeoutTurn_) {
         // Spec: timeout_turn == 0 means "play as fast as possible".
-        budget = timeoutTurnMs_ > 0 ? timeoutTurnMs_ : kMinBudget;
+        budget = timeoutTurnMs_ > 0 ? static_cast<long long>(timeoutTurnMs_) : kMinBudget;
     }
     if (haveTimeLeft_ && timeLeftMs_ > 0 && timeLeftMs_ < kUnlimited) {
         // Pace for a ~30-move game; never exceed the turn cap.
-        const long long share = std::max(kMinBudget, timeLeftMs_ / 30);
+        const long long share = std::max(kMinBudget, static_cast<long long>(timeLeftMs_) / 30);
         budget = std::min(budget, share);
     } else if (timeoutMatchMs_ > 0) {
-        const long long share = std::max(kMinBudget, timeoutMatchMs_ / 30);
+        const long long share = std::max(kMinBudget, static_cast<long long>(timeoutMatchMs_) / 30);
         budget = std::min(budget, share);
     }
     // Reserve a small margin so the reply lands inside the strict turn limit
