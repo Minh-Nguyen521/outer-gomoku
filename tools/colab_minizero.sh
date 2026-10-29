@@ -490,11 +490,17 @@ train() {
     # The second prompt only appears on continue, and extra input after
     # training starts is ignored.
     #
-    # program_use_color_message=false disables ANSI escapes that Colab shows
-    # as literal "(B" sequences.
+    # program_use_color_message=false disables ANSI escapes from the engine
+    # itself, but quick-run.sh's own colorize/log helpers still emit them
+    # (they hard-code tput colors when TERM is set). A piped stdin also makes
+    # some helpers emit raw CSI sequences that Colab renders as literal
+    # "(B" garbage. Strip every ANSI escape sequence from the whole training
+    # output so the notebook stays readable.
+    ansi_filter() { sed -u -e 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' -e 's/\x1b[()][0-9A-B]//g' -e 's/\x1b[@-~]//g'; }
     printf 'Cy' | tools/quick-run.sh train "$GAME" "$alg" "$iters" \
         -n "$run" -g 0 --sp_progress \
-        -conf_str "env_board_size=$BOARD:env_gomoku_rule=$RULE:program_use_color_message=false"
+        -conf_str "env_board_size=$BOARD:env_gomoku_rule=$RULE:program_use_color_message=false" \
+        2>&1 | ansi_filter
 }
 
 # --------------------------------------------------------------------------
