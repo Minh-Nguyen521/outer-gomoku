@@ -216,6 +216,17 @@ PY
 
     BIN="$MZ/build/$GAME/minizero_$GAME"
     [ -x "$BIN" ] || die "no binary at $BIN"
+
+    # train.py does __import__('build.<game>') expecting the CMake build dir
+    # to resolve as a namespace package. That works only until something
+    # installs the pip package 'build' (pypa), whose regular package shadows
+    # namespace resolution even with PYTHONPATH=. earlier in sys.path.
+    # Kaggle images ship pypa/build preinstalled -> ModuleNotFoundError.
+    if [ ! -f "$MZ/build/$GAME/__init__.py" ]; then
+        printf '' > "$MZ/build/$GAME/__init__.py"
+        echo "  created build/$GAME/__init__.py (fix pip 'build' shadowing)"
+    fi
+
     log "Built $BIN"
     local probe
     if probe="$("$BIN" -mode zero_training_name \
