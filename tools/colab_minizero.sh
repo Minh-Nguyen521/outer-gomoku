@@ -483,12 +483,16 @@ train() {
     # restart-prompt default is "R", which rm -rf's the exact directory the
     # resume step above just restored from Drive. A VM-recycled run was
     # silently restarted from iteration 0 this way. Pipe the intended answers
-    # in explicitly; the second prompt only appears on continue, and extra
-    # input after training starts is ignored.
+    # in explicitly. NOTE: both prompts use `read -n1`, which consumes exactly
+    # one character and returns -- no newline. 'C\ny\n' would feed '\n' to the
+    # second prompt (rejected -> server exits -> "Failed to start zero
+    # training server"), so the answers must be sent WITHOUT separators.
+    # The second prompt only appears on continue, and extra input after
+    # training starts is ignored.
     #
     # program_use_color_message=false disables ANSI escapes that Colab shows
     # as literal "(B" sequences.
-    printf 'C\ny\n' | tools/quick-run.sh train "$GAME" "$alg" "$iters" \
+    printf 'Cy' | tools/quick-run.sh train "$GAME" "$alg" "$iters" \
         -n "$run" -g 0 --sp_progress \
         -conf_str "env_board_size=$BOARD:env_gomoku_rule=$RULE:program_use_color_message=false"
 }
