@@ -339,7 +339,7 @@ void PiskvorkBrain::undo(int n) {
 
 long long PiskvorkBrain::moveBudgetMs() const {
     constexpr long long kDefaultTurn = 5000;
-    constexpr long long kMinBudget = 50;
+    constexpr std::int64_t kMinBudget = 50;
     constexpr long long kMaxBudget = 60000;
     constexpr long long kUnlimited = 2147483647;
 
