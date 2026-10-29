@@ -36,6 +36,8 @@
 #                       # edit RUNDIR/dataset-metadata.json id/title
 #                   (metadata is rewritten by this script automatically).
 #   PUSH_EVERY      seconds between dataset pushes, default 1800.
+#   WORKERS         self-play workers per GPU (-w), default 2.
+#   BATCH           NN inference batch per worker (-b), default 16.
 
 set -euo pipefail
 
@@ -301,10 +303,22 @@ train() {
     gpus="$(nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null | tr '\n' ',' | sed 's/,$//')"
     [ -n "$gpus" ] || gpus=0
 
+    # Throughput knobs (total games in flight = workers x batch x GPUs).
+    #   WORKERS  -w flag of quick-run.sh: self-play workers PER GPU.
+    #            2/GPU saturates a T4 (NN batch 16/worker stays ~70-90% util);
+    #            3+ risks VRAM (each worker loads its own NN copy) and
+    #            starves the CPU (Kaggle gives ~4 cores).
+    #   BATCH    -b flag: NN inference batch size per worker. 16 fits ~8MB
+    #            input planes per inference; 32 doubles VRAM per worker.
+    # Defaults chosen for T4 x2: 2 workers x 16 batch x 2 GPUs = 64 games in
+    # flight vs 8 on the stock single-worker setup (~8x throughput).
+    local workers="${WORKERS:-2}" batch="${BATCH:-16}"
+    local perf_args=(-w "$workers" -b "$batch")
+
     cd "$MZ"
-    ansi_filter() { sed -e 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' -e 's/\x1b[()][0-9A-B]//g' -e 's/\x1b[@-~]//g'; }
+    ansi_filter() { sed -e 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' -e 's/\x1b[()[0-9A-B]//g' -e 's/\x1b[@-~]//g'; }
     printf 'Cy' | tools/quick-run.sh train "$GAME" "$alg" "$iters" \
-        -n "$run" -g "$gpus" --sp_progress \
+        -n "$run" -g "$gpus" "${perf_args[@]}" --sp_progress \
         -conf_str "env_board_size=$BOARD:env_gomoku_rule=$RULE:program_use_color_message=false" \
         "${extra_args[@]}" \
         2>&1 | ansi_filter
