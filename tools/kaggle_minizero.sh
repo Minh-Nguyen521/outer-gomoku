@@ -233,13 +233,16 @@ train() {
     run="${RUN_NAME:-${GAME}_oo_${BOARD}x${BOARD}_${alg}_run}"
     local_dir="$MZ/$run"
     push_pid=""
-    mkdir -p "$local_dir"
 
     # ---- Resume. Unlike Colab, /kaggle/working does NOT survive across
     # sessions; a previous run must be attached as notebook Input (either
     # the earlier notebook output, or the auto-pushed Kaggle Dataset).
+    # NOTE: do NOT mkdir the run dir unconditionally -- an EMPTY run dir
+    # makes zero-server.sh prompt (R)estart/(C)ontinue, and "C" on a
+    # dir with no model/ crashes the server with an empty model_file.
     if [ -d "$PERSIST_SRC" ] && [ -n "$(ls -A "$PERSIST_SRC" 2>/dev/null)" ]; then
         log "Resuming: restoring $run from notebook input"
+        mkdir -p "$local_dir"
         cp -r "$PERSIST_SRC/." "$local_dir/" || true
         ls "$local_dir"/model/*.pt >/dev/null 2>&1 &&
             echo "  restored $(ls "$local_dir"/model/*.pt | wc -l) checkpoints" ||
