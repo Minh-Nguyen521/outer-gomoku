@@ -499,11 +499,14 @@ train() {
     #
     # program_use_color_message=false disables ANSI escapes from the engine
     # itself, but quick-run.sh's own colorize/log helpers still emit them
-    # (they hard-code tput colors when TERM is set). A piped stdin also makes
-    # some helpers emit raw CSI sequences that Colab renders as literal
-    # "(B" garbage. Strip every ANSI escape sequence from the whole training
-    # output so the notebook stays readable.
-    ansi_filter() { sed -u -e 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' -e 's/\x1b[()][0-9A-B]//g' -e 's/\x1b[@-~]//g'; }
+    # (they hard-code tput colors when TERM is set). Strip every ANSI escape
+    # sequence from the whole training output so the notebook stays readable.
+    # NO `sed -u` here: unbuffered mode processes input in small chunks, which
+    # splits escape sequences like \x1b[33m across reads -- the leading \x1b[
+    # is flushed in one chunk and the trailing "33m" survives the filter
+    # (observed as stray "33m"/"97m" all over the Colab log). Line-based
+    # buffering sees each sequence whole.
+    ansi_filter() { sed -e 's/\x1b\[[0-9;?]*[ -\/]*[@-~]//g' -e 's/\x1b[()][0-9A-B]//g' -e 's/\x1b[@-~]//g'; }
     printf 'Cy' | tools/quick-run.sh train "$GAME" "$alg" "$iters" \
         -n "$run" -g 0 --sp_progress \
         -conf_str "env_board_size=$BOARD:env_gomoku_rule=$RULE:program_use_color_message=false" \
