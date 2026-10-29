@@ -343,6 +343,13 @@ PY
 train() {
     check_workdir train
     local iters="${1:-300}" alg="${2:-gmz}"
+    shift 2 2>/dev/null || shift $#  # allow passthrough args after iters/alg
+    # Passthrough: `train 30 gmz -conf_str "k=v:k2=v2" --sp_gpu 0,0` forwards
+    # everything after alg straight to quick-run.sh. Without this, overrides
+    # like zero_num_games_per_iteration=16 were silently dropped and a resumed
+    # run kept its OLD config (2000 games/iter), turning a 30-minute smoke
+    # test into a 17-hour crawl.
+    local extra_args=("$@")
     # NOT `local`: finish() runs as an EXIT trap, which fires *after* this
     # function returns, so anything it touches must outlive the call. As
     # locals plus `set -u` these produced "mirror_pid: unbound variable" on
@@ -500,6 +507,7 @@ train() {
     printf 'Cy' | tools/quick-run.sh train "$GAME" "$alg" "$iters" \
         -n "$run" -g 0 --sp_progress \
         -conf_str "env_board_size=$BOARD:env_gomoku_rule=$RULE:program_use_color_message=false" \
+        "${extra_args[@]}" \
         2>&1 | ansi_filter
 }
 
