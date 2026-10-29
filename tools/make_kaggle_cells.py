@@ -21,18 +21,31 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, "tools", "kaggle_minizero.sh")
 OUTDIR = os.path.join(REPO, "build")
-REMOTE = "/kaggle/working/kaggle_minizero.sh"
+REMOTE = "/kaggle/working/oog/tools/kaggle_minizero.sh"
 
-SETUP = """# ---- Cell 1: bootstrap + setup (run once per session) ----
-# Writes tools/kaggle_minizero.sh into the VM, then builds MiniZero for Gomoku.
+# The setup cell clones this repo (PRIVATE) instead of embedding the script
+# as base64, so the notebook always runs the current code from git.
+# Fill GITHUB_TOKEN before generating cells; it ends up in the generated
+# notebook -- keep both the repo and the notebook PRIVATE, and use a
+# fine-grained token scoped to Contents: Read-only for this repo only.
+# GITHUB_TOKEN is intentionally NOT committed: it is read from the
+# environment (or tools/.github_token, which is gitignored).
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN") or (
+    open(os.path.join(REPO, "tools", ".github_token")).read().strip()
+    if os.path.exists(os.path.join(REPO, "tools", ".github_token")) else "")
+if not GITHUB_TOKEN:
+    sys.exit("set GITHUB_TOKEN or create tools/.github_token before generating")
+REPO_URL = f"https://{GITHUB_TOKEN}@github.com/Minh-Nguyen521/outer-gomoku.git"
+
+SETUP = """# ---- Cell 1: clone repo + setup (run once per session) ----
+# Clones the private repo with an embedded read-only PAT, then builds MiniZero.
 # Requires Internet = ON (Settings > Internet) for apt/pip/git.
-#
-# embedded kaggle_minizero.sh: {size} bytes, sha256 {sha}
 %%bash
 set -e
-echo '{payload}' | base64 -d | gunzip > {remote}
-chmod +x {remote}
-REPO=/kaggle/working/oog bash {remote} setup
+if [ ! -d /kaggle/working/oog ]; then
+    git clone --depth 1 '{repo_url}' /kaggle/working/oog
+fi
+REPO=/kaggle/working/oog bash /kaggle/working/oog/tools/kaggle_minizero.sh setup
 """
 
 SMOKE = """# ---- Cell 2: smoke test, 30 iterations ----
@@ -67,11 +80,10 @@ FILES = {
 
 def build():
     raw = open(SCRIPT, "rb").read()
-    payload = base64.b64encode(gzip.compress(raw, 9)).decode()
     sha = hashlib.sha256(raw).hexdigest()
     out = {}
     for name, tmpl in FILES.items():
-        out[name] = tmpl.format(payload=payload, remote=REMOTE,
+        out[name] = tmpl.format(repo_url=REPO_URL, remote=REMOTE,
                                 size=len(raw), sha=sha[:16])
     return out, len(raw), sha
 

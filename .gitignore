@@ -42,3 +42,4 @@ __pycache__/
 *.tmp
 *.bak
 katagomo_bridge.py.orig
+.github_token
