@@ -45,9 +45,9 @@ SETUP = """%%bash
 # (even a comment) turns the whole cell into Python and fails with
 # "SyntaxError: invalid syntax".
 set -e
-if [ ! -d /kaggle/working/oog ]; then
-    git clone --depth 1 '{repo_url}' /kaggle/working/oog
-fi
+# Force re-clone to pick up the latest fixes; cached copies may be stale.
+rm -rf /kaggle/working/oog
+git clone --depth 1 '{repo_url}' /kaggle/working/oog
 REPO=/kaggle/working/oog bash /kaggle/working/oog/tools/kaggle_minizero.sh setup
 """
 

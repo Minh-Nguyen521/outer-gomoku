@@ -234,6 +234,13 @@ train() {
     local_dir="$MZ/$run"
     push_pid=""
 
+    # ---- Clean up a leftover BROKEN run dir from an earlier failed attempt:
+    # a dir without model/*.pt makes zero-server.sh's (C)ontinue path crash.
+    if [ -d "$local_dir" ] && ! ls "$local_dir"/model/*.pt >/dev/null 2>&1; then
+        log "Removing broken run dir (no checkpoints): $local_dir"
+        rm -rf "$local_dir"
+    fi
+
     # ---- Resume. Unlike Colab, /kaggle/working does NOT survive across
     # sessions; a previous run must be attached as notebook Input (either
     # the earlier notebook output, or the auto-pushed Kaggle Dataset).
