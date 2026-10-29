@@ -293,6 +293,20 @@ train() {
                 "$local_dir/Training.log" | tail -n 25 || echo "  none found"
         else
             echo "  no Training.log at $local_dir"
+            # Server died during init (before Training.log exists). Show
+            # whatever it left behind: op.log, cfg, weights, and retry the
+            # initial-weight creation with stderr VISIBLE.
+            log "Init-time failure diagnostics"
+            find "$local_dir" -maxdepth 2 -type f -exec ls -la {} \; 2>/dev/null | head -30
+            [ -f "$local_dir/op.log" ] && { echo "--- op.log ---"; cat "$local_dir/op.log"; }
+            local cfg
+            cfg="$(ls "$local_dir"/*.cfg 2>/dev/null | head -1)"
+            if [ -n "$cfg" ] && [ -f "$MZ/minizero/learner/train.py" ]; then
+                log "Retrying initial weight creation with visible stderr"
+                ( cd "$MZ" && echo 'train "" -1 -1' | PYTHONPATH=. \
+                    python3 minizero/learner/train.py "$GAME" \
+                    "$local_dir" "$cfg" 2>&1 | tail -n 30 ) || true
+            fi
         fi
         return $rc
     }
