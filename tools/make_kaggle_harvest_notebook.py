@@ -120,8 +120,14 @@ cd "$REPO"
 
 find_eng() {
   local exe
+  # Prefer the least-demanding build when a zip ships several CPU variants
+  # (rapfi25 has avx2/avx512/avx512vnni/avxvnni; Kaggle CPUs lack AVX-512,
+  # the avx512 exe segfaults on startup and kills the whole pair).
   exe="$(find "third_party/$1" -maxdepth 3 -iname 'pbrain-*' |
-         grep -viE 'unins|setup|vcredist|\\.so' | head -n1)"
+         grep -viE 'unins|setup|vcredist|\.so' |
+         grep -i avx2 | head -n1)"
+  [ -n "$exe" ] || exe="$(find "third_party/$1" -maxdepth 3 -iname 'pbrain-*' |
+         grep -viE 'unins|setup|vcredist|\.so|avx512|avxvnni' | head -n1)"
   case "$exe" in
     *.exe) echo "wine $REPO/$exe" ;;
     *)     chmod +x "$exe" 2>/dev/null; echo "$REPO/$exe" ;;
