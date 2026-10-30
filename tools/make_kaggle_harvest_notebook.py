@@ -114,7 +114,7 @@ HARVEST_CELL = """\
 set -uo pipefail
 REPO=/kaggle/working/oog
 OUT=/kaggle/working/data/harvest_top5.jsonl
-GAMES_PER_PAIR=${GAMES_PER_PAIR:-416}
+GAMES_PER_PAIR=${GAMES_PER_PAIR:-700}
 TURN_MS=${TURN_MS:-100}
 cd "$REPO"
 
