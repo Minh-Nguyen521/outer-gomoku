@@ -36,9 +36,23 @@ import argparse
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import match  # noqa: E402
+
+
+def all_ring_first_moves():
+    """Every legal Outer-Open first move: the 104 squares on the outer two
+    rows or columns of a 15x15 board."""
+    return [(r, c) for r in range(15) for c in range(15)
+            if r < 2 or r >= 13 or c < 2 or c >= 13]
+
+
+def load_harvest_openings(spec):
+    if spec == "full-ring":
+        return all_ring_first_moves()
+    return match.load_openings(spec)
 
 
 def play_and_record(idx, cmd_a, cmd_b, mcfg, cwd, cfg):
@@ -50,6 +64,7 @@ def play_and_record(idx, cmd_a, cmd_b, mcfg, cwd, cfg):
     board = match.Board()
     played = []
     winner = None
+    opening = None
     try:
         for side in ("B", "W"):
             b = brains[side]
@@ -60,17 +75,26 @@ def play_and_record(idx, cmd_a, cmd_b, mcfg, cwd, cfg):
             b.send(f"INFO timeout_turn {cfg.timeout_turn}")
             b.send(f"INFO timeout_match {cfg.timeout_match}")
 
-        mover, moves = "B", 0
+        # The manager plays the opening itself (see tools/match.py): Outer-Open
+        # forces Black's first stone onto the ring, and left to themselves the
+        # engines open centrally -- which would make every harvested game
+        # illegal under the very rule this data exists to teach.
+        if cfg.openings:
+            opening = cfg.openings[idx % len(cfg.openings)]
+            if not board.play(opening[0], opening[1], "B"):
+                return None, f"illegal opening {opening}"
+
+        mover = "W" if opening is not None else "B"
         while True:
-            mv, err = match.request_move(brains[mover], board, None, mcfg,
-                                         moves == 0, cfg.timeout_turn, mover)
+            mv, err = match.request_move(brains[mover], board, opening, mcfg,
+                                         mover == "B" and opening is None,
+                                         cfg.timeout_turn, mover)
             if mv is None:
                 return None, err or "no move"
             r, c = mv
             if not board.play(r, c, mover):
                 return None, f"illegal move ({r},{c})"
             played.append((r, c, mover))
-            moves += 1
             if board.win_at(r, c):
                 winner = mover
                 break
@@ -85,9 +109,12 @@ def play_and_record(idx, cmd_a, cmd_b, mcfg, cwd, cfg):
     # Sample positions along the game. Skip the opening -- near-empty boards
     # carry little signal and all look alike -- and skip the final plies, where
     # the win is already on the board and the label is trivially 0 or 1.
+    # The opening was played by the manager, so it belongs in the record.
+    if opening is not None:
+        played.insert(0, (opening[0], opening[1], "B"))
     out = []
     total = len(played)
-    for ply in range(cfg.min_ply, max(cfg.min_ply, total - cfg.skip_last),
+    for ply in range(max(cfg.min_ply, 2), max(2, total - cfg.skip_last),
                      cfg.every):
         prefix = played[:ply]
         stm = "B" if ply % 2 == 0 else "W"
@@ -121,7 +148,12 @@ def main(argv):
     ap.add_argument("--timeout-turn", type=int, default=2000)
     ap.add_argument("--timeout-match", type=int, default=600000)
     ap.add_argument("--rule", type=int, default=0)
+    ap.add_argument("--openings", type=str, default="full-ring",
+                    help="'full-ring' (all 104 legal first moves), "
+                         "'default' (match.py's 15), or a file of 'r,c' "
+                         "per line. Openings cycle by game index.")
     cfg = ap.parse_args(argv)
+    cfg.openings = load_harvest_openings(cfg.openings)
 
     mcfg = match.parse_args([
         "--engine-a", cfg.engine_a, "--engine-b", cfg.engine_b,
@@ -138,7 +170,12 @@ def main(argv):
     os.makedirs(os.path.dirname(os.path.abspath(cfg.out)), exist_ok=True)
     with open(cfg.out, "a") as fh:
         for i in range(cfg.games):
-            positions, info = play_and_record(i, cmd_a, cmd_b, mcfg, cwd, cfg)
+            for retry in range(3):
+                positions, info = play_and_record(i, cmd_a, cmd_b, mcfg, cwd, cfg)
+                if positions is not None:
+                    break
+                if retry < 2:
+                    time.sleep(0.5)
             if positions is None:
                 print(f"  game {i}: SKIPPED ({info})", file=sys.stderr)
                 continue
