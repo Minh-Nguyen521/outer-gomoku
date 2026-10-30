@@ -130,6 +130,13 @@ find_eng() {
 
 mkdir -p "$(dirname "$OUT")"; touch "$OUT"
 
+# Offset the opening cycle each lap so reruns of this cell (the session may
+# hit the 12h cap) keep playing fresh ring openings instead of repeating.
+LAP=$( [ -f /kaggle/working/lap.txt ] && cat /kaggle/working/lap.txt || echo 0 )
+START_IDX=$(( LAP * GAMES_PER_PAIR ))
+echo "lap=$LAP start_idx=$START_IDX"
+echo $(( LAP + 1 )) > /kaggle/working/lap.txt
+
 i=0
 for a in vibefive agmk26 slowrenju20 rapfi25 yixin18; do
   for b in vibefive agmk26 slowrenju20 rapfi25 yixin18; do
@@ -140,6 +147,7 @@ for a in vibefive agmk26 slowrenju20 rapfi25 yixin18; do
     python3 tools/harvest_games.py \\
       --engine-a "$EA" --engine-b "$EB" \\
       --games "$GAMES_PER_PAIR" --out "$OUT" \\
+      --start-idx "$START_IDX" \\
       --openings full-ring \\
       --timeout-turn "$TURN_MS" --timeout-match 3600000 \\
       --every 2 --min-ply 6 --skip-last 4 || echo "pair failed, continuing"

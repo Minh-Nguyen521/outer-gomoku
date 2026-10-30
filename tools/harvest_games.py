@@ -148,6 +148,9 @@ def main(argv):
     ap.add_argument("--timeout-turn", type=int, default=2000)
     ap.add_argument("--timeout-match", type=int, default=600000)
     ap.add_argument("--rule", type=int, default=0)
+    ap.add_argument("--start-idx", type=int, default=0,
+                    help="Starting game index; shifts the opening cycle so "
+                         "reruns cover fresh ring openings.")
     ap.add_argument("--openings", type=str, default="full-ring",
                     help="'full-ring' (all 104 legal first moves), "
                          "'default' (match.py's 15), or a file of 'r,c' "
@@ -169,7 +172,7 @@ def main(argv):
     wins = {"B": 0, "W": 0, "draw": 0}
     os.makedirs(os.path.dirname(os.path.abspath(cfg.out)), exist_ok=True)
     with open(cfg.out, "a") as fh:
-        for i in range(cfg.games):
+        for i in range(cfg.start_idx, cfg.start_idx + cfg.games):
             for retry in range(3):
                 positions, info = play_and_record(i, cmd_a, cmd_b, mcfg, cwd, cfg)
                 if positions is not None:
