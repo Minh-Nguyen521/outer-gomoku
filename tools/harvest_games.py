@@ -172,16 +172,34 @@ def main(argv):
     wins = {"B": 0, "W": 0, "draw": 0}
     os.makedirs(os.path.dirname(os.path.abspath(cfg.out)), exist_ok=True)
     with open(cfg.out, "a") as fh:
+        consecutive_fail = 0
         for i in range(cfg.start_idx, cfg.start_idx + cfg.games):
+            positions, info = None, "no attempts succeeded"
             for retry in range(3):
-                positions, info = play_and_record(i, cmd_a, cmd_b, mcfg, cwd, cfg)
+                try:
+                    positions, info = play_and_record(i, cmd_a, cmd_b,
+                                                      mcfg, cwd, cfg)
+                except Exception as e:  # BrokenPipeError and friends: the
+                    # engine died mid-handshake; treat like a failed game
+                    # rather than letting it kill the whole harvest.
+                    positions, info = None, f"exception: {e!r}"
                 if positions is not None:
                     break
                 if retry < 2:
-                    time.sleep(0.5)
+                    time.sleep(1.0 * (retry + 1))
             if positions is None:
                 print(f"  game {i}: SKIPPED ({info})", file=sys.stderr)
+                consecutive_fail += 1
+                # If wine (or an engine) is wedged, every game dies the same
+                # way. Continuing burns hours producing nothing: bail out so
+                # the outer driver (notebook / harvest_top5.sh) can restart
+                # the environment and resume from where the file left off.
+                if consecutive_fail >= 10:
+                    print("  10 consecutive failures -- giving up on this "
+                          "pair", file=sys.stderr)
+                    return 1
                 continue
+            consecutive_fail = 0
             wins[info] = wins.get(info, 0) + 1
             for rec in positions:
                 fh.write(json.dumps(rec) + "\n")

@@ -157,7 +157,12 @@ for a in vibefive agmk26 slowrenju20 rapfi25 yixin18; do
       --openings full-ring \\
       --timeout-turn "$TURN_MS" --timeout-match 3600000 \\
       --every 2 --min-ply 6 --skip-last 4 || echo "pair failed, continuing"
-    sleep 1
+    # Wine accumulates zombie state over hundreds of game spawns and
+    # eventually wedges every engine init. Kill the whole wine tree --
+    # a fresh wineserver is spawned on demand by the next pair.
+    wineserver -k 2>/dev/null || true
+    pkill -9 -f 'pbrain-' 2>/dev/null || true
+    sleep 3
   done
 done
 
