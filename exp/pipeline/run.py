@@ -107,6 +107,7 @@ def main(argv):
                                           "train.py"),
                   "--size", "15",
                   "--init", seed,
+                  "--prefill", cfg.data,
                   "--iterations", str(cfg.gumbel_iters),
                   "--games", str(cfg.gumbel_games),
                   "--k", str(cfg.gumbel_k),

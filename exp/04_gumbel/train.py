@@ -204,6 +204,10 @@ def main(argv):
     ap.add_argument("--init", default=None,
                     help="warm-start from tools/train_policy Net checkpoint "
                          "(15x15 only; the 9x9 prototype has its own arch)")
+    ap.add_argument("--prefill", default=None,
+                    help="harvest jsonl to prefill the replay buffer with "
+                         "(15x15 only). Self-play data then joins and "
+                         "gradually evicts it via the FIFO cap.")
     cfg = ap.parse_args(argv)
 
     n, dev = cfg.size, (
@@ -231,6 +235,55 @@ def main(argv):
     ring_firsts = [(r, c) for r in range(n) for c in range(n)
                    if Goboard(n).is_ring(r, c)]
     buf = []  # (planes, pi, z) rolling buffer
+
+    if cfg.prefill and n == 15:
+        # Prefill from harvest records: policy = one-hot played move (the
+        # SL signal), value = game result from the mover's perspective.
+        # These samples stabilise the first iterations (self-play at iter 1
+        # is weak data on its own) and the FIFO cap lets fresh self-play
+        # samples evict them naturally. Value signals here are noisy
+        # (docs/value-head.md) but they are only a fraction of the pool.
+        import json
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))))
+        from tools.train_policy import build_planes
+        games_split, cur = [], []
+        for line in open(cfg.prefill):
+            r = json.loads(line)
+            if cur and (r["ply"] <= cur[-1]["ply"]
+                       or r["engines"] != cur[-1]["engines"]):
+                games_split.append(cur)
+                cur = []
+            cur.append(r)
+        if cur:
+            games_split.append(cur)
+        n_pre = 0
+        for g in games_split:
+            moves = g[-1]["moves"]
+            winner = g[-1]["winner"]
+            # sample sparsely: every 4th ply, capped by buffer size overall
+            for ply in range(2, len(moves), 4):
+                stm = "B" if ply % 2 == 0 else "W"
+                nxt = moves[ply]
+                pi = np.zeros(n * n, dtype=np.float32)
+                pi[nxt[1] * n + nxt[0]] = 1.0
+                if winner == "draw":
+                    z = 0.0
+                else:
+                    z = 1.0 if winner == stm else -1.0
+                buf.append((build_planes([tuple(m) for m in moves[:ply]],
+                                         stm), pi, z))
+                n_pre += 1
+                if len(buf) >= cfg.buffer // 2:
+                    break
+            if len(buf) >= cfg.buffer // 2:
+                break
+        print(f"prefilled buffer with {len(buf)} harvest samples "
+              f"(cap {cfg.buffer // 2})", file=sys.stderr)
+        buf = buf[-cfg.buffer:]
+    elif cfg.prefill and n != 15:
+        print("--prefill only supported at --size 15; ignoring",
+              file=sys.stderr)
 
     for it in range(cfg.iterations):
         t0 = time.time()
