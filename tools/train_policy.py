@@ -126,17 +126,23 @@ def load(path, limit=0):
             r = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if "policy" not in r or "result" not in r:
+        if "policy" not in r or ("result" not in r
+                                 and "value_stm" not in r):
             continue
         moves = [tuple(m) for m in r["moves"]]
         X.append(build_planes(moves, r["stm"]))
         P.append(np.asarray(r["policy"], dtype=np.float32))
-        V.append(float(r["result"]))
+        V.append(float(r["result"]) if "result" in r
+                  else float(r["value_stm"]))
         occ = np.zeros(N * N, dtype=np.float32)
         for (x, y) in moves:
             if 0 <= x < N and 0 <= y < N:
                 occ[y * N + x] = 1.0
         legal.append(1.0 - occ)
+    if len(X) < 100:
+        print(f"ERROR: only {len(X)} usable records in {path} — "
+              f"aborting (corrupt/truncated input?)", file=sys.stderr)
+        sys.exit(1)
     return (np.stack(X), np.stack(P), np.asarray(V, dtype=np.float32),
             np.stack(legal))
 

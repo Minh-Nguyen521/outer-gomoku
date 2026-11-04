@@ -22,6 +22,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 
 
+def _count_lines(path):
+    try:
+        with open(path, "rb") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
 def run(cmd, desc):
     print(f"\n===== {desc} =====", flush=True)
     print("$ " + " ".join(cmd[:2]) + " ...", flush=True)
@@ -54,16 +62,21 @@ def main(argv):
 
     # ---- stage 1: distil -------------------------------------------------
     if "1" in stages and not os.path.exists(distill_pt):
-        ok = run(["python3", os.path.join(HERE, "..", "03_distill",
-                                          "sample_positions.py"),
-                  "--data", cfg.data, "--out", positions,
-                  "--limit", str(cfg.label_limit)], "1a sample positions")
-        ok = ok and run(["python3", "tools/label_positions.py",
-                         "--katago", "third_party/KataGomo/cpp/build2/katago",
-                         "--model", "third_party/kgweights/tworule_20x_b18.bin.gz",
-                         "--config", "third_party/KataGomo/cpp/build2/oog.cfg",
-                         "--in", positions, "--out", labelled],
-                        "1b KataGomo labels")
+        if os.path.exists(positions) and os.path.exists(labelled) \
+                and _count_lines(labelled) >= _count_lines(positions):
+            print(f"[skip] 1a/1b: {labelled} is complete (re-using labels)")
+            ok = True
+        else:
+            ok = run(["python3", os.path.join(HERE, "..", "03_distill",
+                                              "sample_positions.py"),
+                      "--data", cfg.data, "--out", positions,
+                      "--limit", str(cfg.label_limit)], "1a sample positions")
+            ok = ok and run(["python3", "tools/label_positions.py",
+                             "--katago", "third_party/KataGomo/cpp/build2/katago",
+                             "--model", "third_party/kgweights/tworule_20x_b18.bin.gz",
+                             "--config", "third_party/KataGomo/cpp/build2/oog.cfg",
+                             "--in", positions, "--out", labelled],
+                            "1b KataGomo labels")
         ok = ok and run(["python3", "tools/train_policy.py",
                          "--data", labelled, "--epochs", "20",
                          "--out", distill_pt], "1c distil")

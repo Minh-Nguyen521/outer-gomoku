@@ -139,21 +139,26 @@ def gumbel_move(net, dev, board: Goboard, k):
     while n_act > 1:
         n_eval = max(1, n_act // 2)
         kept = cands[:n_eval]
-        vals = []
-        for a in kept:
+        # evaluate all candidates in ONE batched forward (the board deep-
+        # copies stay on CPU; only planes go through the net together)
+        vals = np.empty(len(kept), dtype=np.float32)
+        need_eval = []
+        for j, a in enumerate(kept):
             b2 = copy.deepcopy(board)
             b2.play(*divmod(int(a), n))
             if b2.is_terminal():
                 z = b2.result_for_black()
                 stm_black = len(board.moves) % 2 == 0
-                v = z if stm_black else -z
+                vals[j] = z if stm_black else -z
             else:
-                xx = torch.from_numpy(planes(b2)[None]).to(dev)
-                with torch.no_grad():
-                    _, vv = net(xx)
-                v = float(vv[0])
-            vals.append(v)
-        scores = gumbel_scores[kept] + np.asarray(vals)
+                need_eval.append((j, b2))
+        if need_eval:
+            xs = np.stack([planes(b2) for _, b2 in need_eval])
+            xx = torch.from_numpy(xs).to(dev)
+            with torch.no_grad():
+                _, vv = net(xx)
+            vals[[j for j, _ in need_eval]] = vv.cpu().numpy()
+        scores = gumbel_scores[kept] + vals
         order = np.argsort(-scores)
         cands = kept[order]
         n_act = len(cands)
@@ -313,6 +318,13 @@ def main(argv):
                 opt.step()
         print(f"iter {it+1}: trained {cfg.epochs} epochs "
               f"(last loss {loss.item():.3f})", file=sys.stderr)
+
+        # checkpoint every iteration so crashes lose at most one iter,
+        # and the final save below atomically replaces the seed files
+        base, ext = os.path.splitext(cfg.out)
+        for name in (cfg.out, f"{base}_it{it+1}{ext}"):
+            torch.save({"state_dict": net.state_dict(), "board": n,
+                        "gumbel": True, "iter": it + 1}, name)
 
     os.makedirs(os.path.dirname(os.path.abspath(cfg.out)), exist_ok=True)
     torch.save({"state_dict": net.state_dict(), "board": n,

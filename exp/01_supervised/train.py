@@ -26,13 +26,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 from tools.train_policy import Net, build_planes  # noqa: E402
 
 
-def load_harvest(path, limit=0):
+def load_harvest(path, limit=0, stride=1):
     """Group records into games, then sample (prefix, next_move, result).
 
     harvest_games.py writes one record per sampled ply, but the LAST record
     of each game holds the full move list (records embed their prefix). So:
     split by game (engines + ply resets), take the last record's moves as the
     ground truth, re-sample every ply the same way the harvest did.
+
+    stride > 1 subsamples plies within each game (stride=4 keeps ~1M
+    samples from the full harvest) for memory-constrained callers.
     """
     games, cur = [], None
     with open(path) as fh:
@@ -55,7 +58,7 @@ def load_harvest(path, limit=0):
     for g in games:
         moves = g[-1]["moves"]          # full game
         winner = g[-1]["winner"]
-        for ply in range(2, len(moves)):  # every ply: denser than harvest
+        for ply in range(2, len(moves), stride):  # subsample if stride>1
             stm = "B" if ply % 2 == 0 else "W"
             nxt = moves[ply]
             if not (0 <= nxt[0] < N and 0 <= nxt[1] < N):

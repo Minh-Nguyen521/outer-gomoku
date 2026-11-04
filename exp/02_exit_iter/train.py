@@ -89,6 +89,9 @@ def main(argv):
     ap.add_argument("--blocks", type=int, default=4)
     ap.add_argument("--channels", type=int, default=64)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--stride", type=int, default=4,
+                    help="subsample seed plies (memory: full pool ~74GB RAM;"
+                         " stride 4 ~= 1M samples ~= 18GB)")
     ap.add_argument("--init", default=None,
                     help="warm-start from a checkpoint (tools/train_policy "
                          "Net format); skips fresh initialisation")
@@ -98,12 +101,13 @@ def main(argv):
     dev = ("mps" if torch.backends.mps.is_available()
            else "cuda" if torch.cuda.is_available() else "cpu")
 
-    # Seed data from method-1 loader
+    # Seed data from method-1 loader (kept on CPU as numpy; batches are
+    # moved to the device on the fly — the full pool is far too large for
+    # MPS unified memory)
     sys.path.insert(0, os.path.join(REPO, "exp", "01_supervised"))
     from train import load_harvest  # noqa: E402  (method 1 loader)
-    Xs, Ps, Vs = load_harvest(cfg.seed_data, cfg.limit)
-    Xt = [torch.from_numpy(Xs).to(dev), torch.from_numpy(Ps).to(dev),
-          torch.from_numpy(Vs).to(dev)]
+    Xs, Ps, Vs = load_harvest(cfg.seed_data, cfg.limit, stride=cfg.stride)
+    Xt = [Xs, Ps, Vs]  # numpy pool on CPU
 
     net = Net(cfg.blocks, cfg.channels).to(dev)
     if cfg.init:
@@ -124,27 +128,30 @@ def main(argv):
         print(f"iter {it+1}: self-played {cfg.games} games, "
               f"{len(fresh)} samples in {time.time()-t0:.0f}s",
               file=sys.stderr)
-        Xn = torch.from_numpy(np.stack([s[0] for s in fresh])).to(dev)
-        Pn = torch.from_numpy(np.stack([s[1] for s in fresh])).to(dev)
-        Vn = torch.tensor([s[2] for s in fresh], dtype=torch.float32,
-                          device=dev)
+        Xn = np.stack([s[0] for s in fresh])
+        Pn = np.stack([s[1] for s in fresh])
+        Vn = np.asarray([s[2] for s in fresh], dtype=np.float32)
 
         # 2) grow the training pool (self data REPLACES nothing; it appends
         #    and is upweighted implicitly by its freshness)
-        X, P, V = torch.cat([Xt[0], Xn]), torch.cat([Xt[1], Pn]), \
-            torch.cat([Xt[2], Vn])
+        X, P, V = (np.concatenate([Xt[0], Xn]),
+                   np.concatenate([Xt[1], Pn]),
+                   np.concatenate([Xt[2], Vn]))
 
         # 3) train epochs on the pool
         net.train()
         n_pool = X.shape[0]
         for ep in range(cfg.epochs):
-            perm = torch.randperm(n_pool, device=dev)
+            perm = np.random.permutation(n_pool)
             for i in range(0, n_pool, cfg.batch):
                 idx = perm[i:i + cfg.batch]
-                logits, val = net(X[idx])
+                xb = torch.from_numpy(X[idx]).to(dev)
+                pb = torch.from_numpy(P[idx]).to(dev)
+                vb = torch.from_numpy(V[idx]).to(dev)
+                logits, val = net(xb)
                 lp = F.log_softmax(logits, dim=1)
-                loss = -(P[idx] * lp).sum(dim=1).mean() + \
-                    F.mse_loss(val, V[idx])
+                loss = -(pb * lp).sum(dim=1).mean() + \
+                    F.mse_loss(val, vb)
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 opt.step()
@@ -152,7 +159,6 @@ def main(argv):
               file=sys.stderr)
         # fold the self-play data in permanently
         Xt = [X, P, V]
-
     os.makedirs(os.path.dirname(os.path.abspath(cfg.out)), exist_ok=True)
     torch.save({"state_dict": net.state_dict(),
                 "blocks": cfg.blocks, "channels": cfg.channels,
