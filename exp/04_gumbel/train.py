@@ -122,7 +122,16 @@ class Net(nn.Module):
 
 
 def gumbel_move(net, dev, board: Goboard, k):
-    """One Gumbel sequential-halving decision. Returns (action, pi_target)."""
+    """One Gumbel sequential-halving decision (Danihelka et al. 2022).
+
+    k actions are sampled via Gumbel top-k. Halving phases evaluate the
+    remaining candidates with *doubling* visit counts (1, 2, 4, ...) and Q
+    is the MEAN over visits, so the value evidence grows faster than the
+    fixed gumbel noise and forcing moves reliably dominate.
+
+    Total net evals ~= k * ceil(log2(k)) (16 -> 64) — all batched per phase.
+    Returns (action, pi_target).
+    """
     x = torch.from_numpy(planes(board)[None]).to(dev)
     with torch.no_grad():
         logits, _ = net(x)
@@ -135,49 +144,61 @@ def gumbel_move(net, dev, board: Goboard, k):
 
     n = board.n
     cands = np.argsort(-gumbel_scores)[:k]
-    n_act = len(cands)
-    while n_act > 1:
-        n_eval = max(1, n_act // 2)
-        kept = cands[:n_eval]
-        # evaluate all candidates in ONE batched forward (the board deep-
-        # copies stay on CPU; only planes go through the net together)
-        vals = np.empty(len(kept), dtype=np.float32)
-        need_eval = []
-        for j, a in enumerate(kept):
-            b2 = copy.deepcopy(board)
-            b2.play(*divmod(int(a), n))
-            if b2.is_terminal():
-                z = b2.result_for_black()
-                stm_black = len(board.moves) % 2 == 0
-                vals[j] = z if stm_black else -z
-            else:
-                need_eval.append((j, b2))
+    cands = np.asarray(cands, dtype=np.int64)
+    q_sum = {}   # action -> summed value over visits
+    q_cnt = {}
+    visits = 1
+    q_w = 1     # weight of Q in the halving score; doubles with the phase
+    while len(cands) > 1:
+        n_keep = max(1, len(cands) // 2)
+        # phase i: every remaining candidate receives `visits` extra evals
+        vals = np.empty((len(cands), visits), dtype=np.float32)
+        need_eval = {}  # (cand_idx, visit) -> board
+        term_val = {}
+        for ci, a in enumerate(cands):
+            for vi in range(visits):
+                b2 = copy.deepcopy(board)
+                b2.play(*divmod(int(a), n))
+                if b2.is_terminal():
+                    z = b2.result_for_black()
+                    stm_black = len(board.moves) % 2 == 0
+                    term_val[(ci, vi)] = z if stm_black else -z
+                else:
+                    need_eval[(ci, vi)] = b2
         if need_eval:
-            xs = np.stack([planes(b2) for _, b2 in need_eval])
+            xs = np.stack([planes(b2) for b2 in need_eval.values()])
             xx = torch.from_numpy(xs).to(dev)
             with torch.no_grad():
                 _, vv = net(xx)
-            vals[[j for j, _ in need_eval]] = vv.cpu().numpy()
-        scores = gumbel_scores[kept] + vals
+            vv = vv.cpu().numpy()
+            for (key, _), v in zip(need_eval.items(), vv):
+                vals[key] = v
+        for (ci, vi), v in term_val.items():
+            vals[ci, vi] = v
+        for ci, a in enumerate(cands):
+            q_sum[int(a)] = q_sum.get(int(a), 0.0) + float(vals[ci].sum())
+            q_cnt[int(a)] = q_cnt.get(int(a), 0) + visits
+        scores = np.array([gumbel_scores[a]
+                          + q_w * (q_sum[int(a)] / q_cnt[int(a)])
+                          for a in cands])
         order = np.argsort(-scores)
-        cands = kept[order]
-        n_act = len(cands)
+        cands = cands[order][:n_keep]
+        visits *= 2
+        q_w = min(q_w * 2, 16)  # Q evidence grows with the phase budget
     a = int(cands[0])
 
-    # improved-policy target: softmax over (logits + gumbel + Q) of the
-    # considered actions -- the standard Gumbel training signal
+    # improved-policy target: softmax over (logits + gumbel + Q_mean) of the
+    # candidates evaluated in the FIRST phase -- the Gumbel training signal
     pi = np.zeros(n * n, dtype=np.float32)
-    cons = cands  # final surviving set at each halving is complicated; use
-    # the last halving's scored candidates for the target
-    tgt = kept if len(kept) else np.array([a])
-    # recompute logits+g+q on tgt:
-    tgt_scores = np.zeros(len(tgt))
-    for i, act in enumerate(tgt):
-        tgt_scores[i] = gumbel_scores[act]
-    m = np.exp(tgt_scores - tgt_scores.max())
-    m = m / m.sum()
-    for i, act in enumerate(tgt):
-        pi[act] = m[i]
+    scored = [(act, gumbel_scores[act] + q_sum[act] / q_cnt[act])
+              for act in q_sum if q_cnt[act] > 0]
+    tgt = np.array([s for _, s in scored], dtype=np.float64)
+    acts = [act for act, _ in scored]
+    if len(acts):
+        m = np.exp(tgt - tgt.max())
+        m = m / m.sum()
+        for act, w in zip(acts, m):
+            pi[act] = w
     return a, pi
 
 
@@ -324,10 +345,12 @@ def main(argv):
         base, ext = os.path.splitext(cfg.out)
         for name in (cfg.out, f"{base}_it{it+1}{ext}"):
             torch.save({"state_dict": net.state_dict(), "board": n,
+                        "blocks": 4, "channels": 64, "planes": 6,
                         "gumbel": True, "iter": it + 1}, name)
 
     os.makedirs(os.path.dirname(os.path.abspath(cfg.out)), exist_ok=True)
     torch.save({"state_dict": net.state_dict(), "board": n,
+                "blocks": 4, "channels": 64, "planes": 6,
                 "gumbel": True}, cfg.out)
     print(f"saved {cfg.out}", file=sys.stderr)
     return 0

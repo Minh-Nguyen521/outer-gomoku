@@ -43,3 +43,6 @@ __pycache__/
 *.bak
 katagomo_bridge.py.orig
 .github_token
+exp/pipeline/*.jsonl
+bot2048/
+exp/06_finetune/*.jsonl
