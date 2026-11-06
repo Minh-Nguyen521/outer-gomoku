@@ -1,0 +1,112 @@
+"""
+Template bot cho Gomoku online. Bạn cần sửa 3 chỗ: BOT_NAME, load_bot (nếu có model cần tải) và choose_move.
+
+Cần: Python >= 3.9 và file client.py đặt cùng thư mục. Không phải cài thêm thư viện nào.
+
+Có 2 cách chạy:
+  1. Có giao diện: python client.py -> Client -> chọn file này làm bot. App chỉ dùng file wrapper,
+     nên muốn dùng model hay thuật toán gì thì tự viết hoặc gọi trong choose_move.
+  2. Không giao diện, vào phòng có sẵn:
+       python online_wrapper_template.py --url http://100.x.y.z:8765 --code ABC123
+       python online_wrapper_template.py --url https://abc.ngrok-free.app --code ABC123 --name "Tên khác"
+
+Trình tự khi chạy:
+  1. load_bot(room) chạy một lần, trước khi vào phòng. Chưa kết nối gì nên tải lâu bao nhiêu cũng được.
+     Trong app: chọn file là bot được tải ngay, nút "Vào phòng" bị khoá cho tới khi bot sẵn sàng.
+     Sửa file xong thì bấm "Tải lại" trong app.
+  2. Bot sẵn sàng thì vào phòng: bấm "Vào phòng" trong app, còn chạy bằng lệnh thì tự vào.
+  3. Vào phòng xong, server đếm ngược 5 giây rồi ván tự bắt đầu.
+  4. choose_move được gọi mỗi khi tới lượt. Đồng hồ đang chạy, nên đừng tải model ở đây.
+
+Lệnh dùng trong load_bot:
+  room.status("Đang tải model 50%")  : hiện tiến độ trong app hoặc terminal của bạn (không bắt buộc)
+  room.ready()                       : báo đã sẵn sàng, từ lúc này mới vào phòng được;
+                                       nếu quên gọi thì tự tính là sẵn sàng khi load_bot kết thúc
+  raise Exception("...")             : tải thất bại; app hiện lỗi và giữ nút khoá, chạy bằng lệnh thì dừng luôn
+
+Mọi thứ sau đó chạy tự động: bot nhận bàn cờ và gửi nước đi, tự thử lại khi mất mạng, log từng ván được lưu vào
+log_games/. Mỗi lượt có nhiều ván (mặc định 4) và hai bên đổi màu sau mỗi ván; load_bot không chạy lại giữa các ván.
+Bot bị crash thì chạy lại lệnh sau khoảng 15 giây để vào lại ghế cũ. Nếu ván đang chơi thì đồng hồ vẫn chạy trong lúc tải lại.
+
+Luật: nước đầu tiên của ván phải nằm trong 2 vòng ngoài cùng; có từ 5 quân liên tiếp trở lên là thắng.
+Nước đi sai bị từ chối và choose_move sẽ được gọi lại, nhưng đồng hồ vẫn chạy.
+Đồng hồ server tính cả độ trễ mạng, nên hãy nghĩ trong info["time_budget"] thay vì dùng hết giờ.
+"""
+from __future__ import annotations
+
+import argparse
+import random
+
+try:
+    from client import BOARD_SIZE, is_outer, run_bot
+except ImportError:  # máy server có gomoku_online.py
+    from gomoku_online import BOARD_SIZE, is_outer, run_bot
+
+BOT_NAME = "MyBot"  # <-- tên hiển thị của bot trong phòng, tối đa 32 ký tự
+
+MODEL = None  # model của bạn, tải trong load_bot rồi dùng trong choose_move
+
+
+def load_bot(room) -> None:
+    """Tải model và mọi thứ bot cần. Chạy một lần, trước khi vào phòng."""
+    global MODEL
+    # ===== THAY PHẦN DƯỚI ĐÂY BẰNG VIỆC TẢI BOT CỦA BẠN =====
+    room.status("Đang tải model...")
+    # import torch
+    # MODEL = torch.load("my_model.pt")
+    room.ready()
+    # ===== HẾT PHẦN CẦN THAY =====
+
+
+def choose_move(board: list[list[int]], player: int, info: dict) -> tuple[int, int]:
+    """
+    Trả về nước đi (x, y). x là hàng, y là cột, đều tính từ 0 đến 14.
+    Màu quân đổi sau mỗi ván, nên hãy dùng `player` thay vì giả định mình cầm màu nào.
+
+    board  : ma trận 15x15, board[x][y] = 0 (trống), 1 (Đen), 2 (Trắng)
+    player : màu của bạn, 1 (Đen, đi trước) hoặc 2 (Trắng)
+    info   : dict gồm
+        time_budget : số giây nên dùng tối đa cho nước này, đã trừ lề an toàn (None = không giới hạn)
+        time_left   : số giây thực còn lại cho nước này trên đồng hồ server (None = không giới hạn)
+        total_left  : giờ tổng còn lại của bạn (None = không giới hạn)
+        move_left   : giờ còn lại theo giới hạn mỗi nước (None = không giới hạn)
+        ply         : số quân đã có trên bàn
+        last_move   : nước vừa đi {"ply", "player", "x", "y", "spent"}, hoặc None nếu bàn trống
+        moves       : toàn bộ các nước đã đi
+        rules       : {"total_time", "move_time", "games"}, thời gian tính bằng giây, 0 = không giới hạn
+        game_no     : mã của ván, đổi khi sang ván mới; dùng để reset trạng thái của bot
+        round_game  : ván thứ mấy trong lượt, tính từ 1; games: tổng số ván của lượt
+        opponent    : tên đối thủ
+    """
+    # ===== THAY PHẦN DƯỚI ĐÂY BẰNG BOT CỦA BẠN =====
+    # Bot mẫu: đi ngẫu nhiên vào ô trống sát quân đã có. Bot này chỉ để kiểm tra kết nối.
+    cells = [(x, y) for x in range(BOARD_SIZE) for y in range(BOARD_SIZE)]
+    if info["ply"] == 0:
+        return random.choice([cell for cell in cells if is_outer(*cell)])
+    near = [
+        (x, y)
+        for x, y in cells
+        if board[x][y] == 0
+        and any(
+            board[nx][ny] != 0
+            for nx in range(max(0, x - 1), min(BOARD_SIZE, x + 2))
+            for ny in range(max(0, y - 1), min(BOARD_SIZE, y + 2))
+        )
+    ]
+    return random.choice(near or [cell for cell in cells if board[cell[0]][cell[1]] == 0])
+    # ===== HẾT PHẦN CẦN THAY =====
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Chạy bot không giao diện, vào phòng Gomoku online có sẵn")
+    parser.add_argument("--url", required=True, help="Địa chỉ host, ví dụ http://100.x.y.z:8765 hoặc https://abc.ngrok-free.app")
+    parser.add_argument("--code", required=True, help="Match code do server cung cấp")
+    parser.add_argument("--name", default=BOT_NAME, help=f"Tên hiển thị, mặc định lấy từ BOT_NAME ({BOT_NAME})")
+    parser.add_argument("--margin", type=float, default=0.5, help="Lề an toàn (giây) trừ khỏi time_budget, tăng lên nếu mạng chậm")
+    parser.add_argument("--once", action="store_true", help="Thoát khi hết lượt thay vì chờ server mở lượt mới")
+    args = parser.parse_args()
+    run_bot(args.url, args.code, args.name, choose_move, margin=args.margin, once=args.once, load_bot=load_bot)
+
+
+if __name__ == "__main__":
+    main()
