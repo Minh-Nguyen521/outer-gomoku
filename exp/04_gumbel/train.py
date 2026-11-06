@@ -247,8 +247,9 @@ def main(argv):
             os.path.abspath(__file__)))))  # REPO root
         import importlib
         tp = importlib.import_module("tools.train_policy")
-        net = tp.Net(4, 64).to(dev)
         ck = torch.load(cfg.init, map_location=dev)
+        net = tp.Net(ck.get("blocks", 4),
+                     ck.get("channels", 64)).to(dev)
         net.load_state_dict(ck["state_dict"])
         print(f"warm-started from {cfg.init}", file=sys.stderr)
     else:
