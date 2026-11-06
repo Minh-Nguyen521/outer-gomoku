@@ -54,8 +54,16 @@ def strong(name):
     return any(t in name for t in TOP)
 
 
-def load_win_positions(path, max_plies=40, stride=1):
-    """Positions from STRONG-engine WIN games, mover = the winner."""
+def movers_filter(is_winner, include_losers):
+    return is_winner or include_losers
+
+
+def load_win_positions(path, max_plies=40, stride=1, losers=False):
+    """Positions from STRONG-engine WIN games, mover = the winner.
+
+    losers=True additionally keeps LOSER-side plies (defensive play by the
+    beaten engine -- teaches the net how to answer threats), with value -1.
+    """
     X, P, V = [], [], []
     n_games = 0
     for g in iter_games(path):
@@ -69,7 +77,7 @@ def load_win_positions(path, max_plies=40, stride=1):
         for ply in range(2, min(len(moves), max_plies), stride):
             mover_is_winner = (ply % 2 == 0 and winner == "B") or \
                               (ply % 2 == 1 and winner == "W")
-            if not mover_is_winner:
+            if not movers_filter(mover_is_winner, losers):
                 continue
             nxt = moves[ply]
             if not (0 <= nxt[0] < N and 0 <= nxt[1] < N):
@@ -79,7 +87,10 @@ def load_win_positions(path, max_plies=40, stride=1):
             onehot[nxt[1] * N + nxt[0]] = 1.0
             X.append(build_planes([tuple(m) for m in moves[:ply]], stm))
             P.append(onehot)
-            V.append(1.0)  # winner's perspective of a game they won
+            # winner moves: +1; loser defensive moves: value from their
+            # (losing) perspective -- the ANSWER to a threat is what we
+            # teach, not that they eventually lost
+            V.append(1.0 if mover_is_winner else -1.0)
     print(f"win-games: {n_games}  positions: {len(X)}", file=sys.stderr)
     return (np.stack(X), np.stack(P), np.asarray(V, dtype=np.float32))
 
@@ -116,6 +127,8 @@ def main(argv):
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--max-plies", type=int, default=40)
     ap.add_argument("--stride", type=int, default=2)
+    ap.add_argument("--losers", action="store_true",
+                    help="also learn loser-side defensive moves")
     ap.add_argument("--out", default="exp/06_finetune/finetuned.pt")
     cfg = ap.parse_args(argv)
 
@@ -123,7 +136,8 @@ def main(argv):
     if cfg.mode == "labelled":
         X, P, V = load_labelled_positions(cfg.data)
     else:
-        X, P, V = load_win_positions(cfg.data, cfg.max_plies, cfg.stride)
+        X, P, V = load_win_positions(cfg.data, cfg.max_plies, cfg.stride,
+                                     cfg.losers)
 
     n = len(X)
     n_val = max(1, int(n * cfg.val_frac))

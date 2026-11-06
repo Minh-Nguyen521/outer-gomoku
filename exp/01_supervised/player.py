@@ -13,6 +13,7 @@ simulations=0 -> raw policy; >0 adds a shallow 1-ply winning/blunting check
 """
 
 import argparse
+import json
 import os
 import sys
 
@@ -63,8 +64,18 @@ def main():
     ap.add_argument("--simulations", type=int, default=0,
                     help="0 = raw policy; >0 = Gumbel k=<simulations> "
                          "sequential-halving search at inference")
+    ap.add_argument("--book", default="data/opening_book.json",
+                    help="opening book (reply to opponent's ring opening); "
+                         "pass empty string to disable")
     ap.add_argument("--temperature", type=float, default=0.25)
     args = ap.parse_args()
+
+    book = {}
+    if args.book:
+        try:
+            book = json.load(open(args.book))
+        except (OSError, ValueError):
+            pass
 
     dev = ("mps" if torch.backends.mps.is_available()
            else "cuda" if torch.cuda.is_available() else "cpu")
@@ -94,6 +105,11 @@ def main():
 
     def best_move():
         stm = "B" if len(moves) % 2 == 0 else "W"
+        # opening book: reply to the opponent's first (ring) move
+        if len(moves) == 1 and stm == "W" and book:
+            key = f"{moves[0][0]},{moves[0][1]}"
+            if key in book:
+                return book[key]["reply"]
         if args.simulations > 0:
             res = gumbel_search(net, dev, moves, stm, args.simulations)
             if os.environ.get("PLAYER_DEBUG"):
